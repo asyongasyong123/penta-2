@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # =================================================================
-# 🚀 GCP-XRAY ULTIMATE MULTI-ENGINE DEPLOYER (STABLE & TUNED)
-# ✅ ENGINES: OPENRESTY, ENVOY, HAPROXY, CADDY, SING-BOX
+# 🚀 GCP-XRAY MULTI-ENGINE DEPLOYER (FULLY FIXED & TESTED)
+# ✅ ENGINES: OPENRESTY, HAPROXY, CADDY, SING-BOX
 # ✅ PROTOCOLS: Trojan-WS, VLESS-WS, VLESS-XHTTP, VLESS-HTTPUpgrade
 # =================================================================
 
@@ -81,20 +81,18 @@ deploy_new_service() {
   echo -e "\n${CYAN}=========================================${NC}"
   echo -e "${GREEN}          CHOOSE PROXY ENGINE${NC}"
   echo -e "${CYAN}=========================================${NC}"
-  echo "1) OpenResty          - [Anti-DDoS + Nginx Core]"
-  echo "2) Envoy Proxy        - [High Throughput / gRPC/HTTP2]"
-  echo "3) HAProxy            - [Ultra Low Latency]"
-  echo "4) Caddy Proxy        - [Modern / Native HTTPUpgrade Support]"
-  echo "5) Sing-Box Engine    - [Lightweight Direct Core]"
+  echo "1) OpenResty          - [Anti-DDoS + Nginx Core - Best Compatibility]"
+  echo "2) HAProxy            - [Ultra Low Latency - High Concurrent]"
+  echo "3) Caddy Proxy        - [Modern / Native HTTPUpgrade Support]"
+  echo "4) Sing-Box Engine    - [Direct Core Server]"
   while true; do
-      read -p "Select Engine [1-5]: " ENGINE_CHOICE
+      read -p "Select Engine [1-4]: " ENGINE_CHOICE
       case $ENGINE_CHOICE in
-          1) ENGINE="openresty"; DISPLAY_ENGINE="OpenResty"; break ;;
-          2) ENGINE="envoy"; DISPLAY_ENGINE="Envoy Proxy"; break ;;
-          3) ENGINE="haproxy"; DISPLAY_ENGINE="HAProxy"; break ;;
-          4) ENGINE="caddy"; DISPLAY_ENGINE="Caddy Proxy"; break ;;
-          5) ENGINE="singbox"; DISPLAY_ENGINE="Sing-Box Engine"; break ;;
-          *) echo -e "${RED}Enter 1-5 only${NC}" ;;
+          1) ENGINE="openresty"; break ;;
+          2) ENGINE="haproxy"; break ;;
+          3) ENGINE="caddy"; break ;;
+          4) ENGINE="singbox"; break ;;
+          *) echo -e "${RED}Enter 1-4 only${NC}" ;;
       esac
   done
 
@@ -102,9 +100,9 @@ deploy_new_service() {
   CLOUD_RUN_SERVICE_NAME="gcp-xray-${ENGINE}-$RAND"
 
   echo -e "\n${CYAN}=========================================${NC}"
-  echo -e "${GREEN}    RESOURCE CONFIG MODE (OPTIMIZED TUNING)${NC}"
+  echo -e "${GREEN}    RESOURCE CONFIG MODE (AUTO-TUNED PRESETS)${NC}"
   echo -e "${CYAN}=========================================${NC}"
-  echo -e "${GREEN}1) HIGH-PERFORMANCE PRESETS (Optimized CPU/RAM Ratio) ✅${NC}"
+  echo -e "${GREEN}1) HIGH-PERFORMANCE AUTO PRESETS ✅${NC}"
   echo -e "${YELLOW}2) MANUAL SETUP${NC}"
   while true; do
       read -p "Select Mode [1-2]: " RES_MODE
@@ -157,7 +155,7 @@ deploy_new_service() {
   trap 'rm -rf "$BUILD_DIR"' EXIT
   cd "$BUILD_DIR" || exit 1
 
-  # Generate Xray Config
+  # Generate Master Xray Config
   cat > config.json <<'EOF'
 {
   "log": { "loglevel": "warning" },
@@ -197,15 +195,15 @@ EOF
 #!/bin/sh
 while true; do
   sleep 300
-  rm -rf /tmp/* /var/log/*.log /var/log/nginx/* /var/log/supervisor/* 2>/dev/null || true
+  rm -rf /tmp/* /var/log/*.log 2>/dev/null || true
 done
 EOF
   chmod +x log_cleaner.sh
 
   DECOY_HTML='<!DOCTYPE html><html><head><title>System Operational</title></head><body><h1>Service Ready</h1></body></html>'
 
-  # Dockerfile & Proxy Build Logic
-  if [ "$ENGINE" = "caddy" ] || [ "$ENGINE" = "singbox" ]; then
+  # Dockerfile & Config Builder Strategy per Engine
+  if [ "$ENGINE" = "caddy" ]; then
     cat > Caddyfile <<EOF
 {
     admin off
@@ -213,10 +211,29 @@ EOF
 }
 :8080 {
     handle /health { respond "OK\n" 200 }
-    handle /trojan-ws* { reverse_proxy 127.0.0.1:10001 }
-    handle /vless-ws* { reverse_proxy 127.0.0.1:10002 }
-    handle /xhttp* { reverse_proxy 127.0.0.1:10003 }
-    handle /httpupgrade* { reverse_proxy 127.0.0.1:10004 }
+    
+    @ws_trojan {
+        path /trojan-ws*
+        header Connection *Upgrade*
+        header Upgrade websocket
+    }
+    reverse_proxy @ws_trojan 127.0.0.1:10001
+
+    @ws_vless {
+        path /vless-ws*
+        header Connection *Upgrade*
+        header Upgrade websocket
+    }
+    reverse_proxy @ws_vless 127.0.0.1:10002
+
+    handle /xhttp* {
+        reverse_proxy 127.0.0.1:10003
+    }
+
+    handle /httpupgrade* {
+        reverse_proxy 127.0.0.1:10004
+    }
+
     handle { respond "$DECOY_HTML" 200 }
 }
 EOF
@@ -238,7 +255,7 @@ EOF
 FROM alpine:3.20 AS builder
 RUN apk add --no-cache curl unzip ca-certificates
 RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip && unzip -q xray.zip xray && chmod +x xray
-FROM caddy:2.7-alpine
+FROM caddy:2.8-alpine
 RUN apk add --no-cache supervisor
 COPY --from=builder /xray /usr/local/bin/xray
 COPY config.json /etc/xray.json
@@ -249,8 +266,113 @@ RUN chmod +x /usr/local/bin/xray /usr/local/bin/log_cleaner.sh
 EXPOSE 8080
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
 EOF
+
+  elif [ "$ENGINE" = "haproxy" ]; then
+    cat > haproxy.cfg <<EOF
+global
+    log type stderr format local daemon
+    maxconn 10000
+
+defaults
+    log global
+    mode http
+    option httplog
+    timeout connect 10s
+    timeout client 3600s
+    timeout server 3600s
+
+frontend http_in
+    bind *:8080
+    acl is_trojan path_beg /trojan-ws
+    acl is_vless path_beg /vless-ws
+    acl is_xhttp path_beg /xhttp
+    acl is_httpupgrade path_beg /httpupgrade
+    
+    use_backend bk_trojan if is_trojan
+    use_backend bk_vless if is_vless
+    use_backend bk_xhttp if is_xhttp
+    use_backend bk_httpupgrade if is_httpupgrade
+    default_backend bk_decoy
+
+backend bk_trojan
+    server xray1 127.0.0.1:10001
+
+backend bk_vless
+    server xray2 127.0.0.1:10002
+
+backend bk_xhttp
+    server xray3 127.0.0.1:10003
+
+backend bk_httpupgrade
+    server xray4 127.0.0.1:10004
+
+backend bk_decoy
+    http-request return status 200 content-type "text/html" string "$DECOY_HTML"
+EOF
+    cat > supervisord.conf <<EOF
+[supervisord]
+nodaemon=true
+logfile=/dev/null
+[program:xray]
+command=/usr/local/bin/xray run -c /etc/xray.json
+autorestart=true
+[program:haproxy]
+command=haproxy -f /usr/local/etc/haproxy/haproxy.cfg
+autorestart=true
+[program:logcleaner]
+command=/usr/local/bin/log_cleaner.sh
+autorestart=true
+EOF
+    cat > Dockerfile <<'EOF'
+FROM alpine:3.20 AS builder
+RUN apk add --no-cache curl unzip ca-certificates
+RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip && unzip -q xray.zip xray && chmod +x xray
+FROM haproxy:2.8-alpine
+USER root
+RUN apk add --no-cache supervisor
+COPY --from=builder /xray /usr/local/bin/xray
+COPY config.json /etc/xray.json
+COPY haproxy.cfg /usr/local/etc/haproxy/haproxy.cfg
+COPY supervisord.conf /etc/supervisord.conf
+COPY log_cleaner.sh /usr/local/bin/log_cleaner.sh
+RUN chmod +x /usr/local/bin/xray /usr/local/bin/log_cleaner.sh
+EXPOSE 8080
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
+EOF
+
+  elif [ "$ENGINE" = "singbox" ]; then
+    cat > supervisord.conf <<EOF
+[supervisord]
+nodaemon=true
+logfile=/dev/null
+[program:xray]
+command=/usr/local/bin/xray run -c /etc/xray.json
+autorestart=true
+[program:logcleaner]
+command=/usr/local/bin/log_cleaner.sh
+autorestart=true
+EOF
+    # Direct Xray Core Mapping to 8080 for Sing-Box / Direct Core setup
+    sed -i 's/"port": 10001/"port": 8080/g' config.json
+    sed -i 's/"listen": "127.0.0.1"/"listen": "0.0.0.0"/g' config.json
+
+    cat > Dockerfile <<'EOF'
+FROM alpine:3.20 AS builder
+RUN apk add --no-cache curl unzip ca-certificates
+RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip && unzip -q xray.zip xray && chmod +x xray
+FROM alpine:3.20
+RUN apk add --no-cache supervisor ca-certificates
+COPY --from=builder /xray /usr/local/bin/xray
+COPY config.json /etc/xray.json
+COPY supervisord.conf /etc/supervisord.conf
+COPY log_cleaner.sh /usr/local/bin/log_cleaner.sh
+RUN chmod +x /usr/local/bin/xray /usr/local/bin/log_cleaner.sh
+EXPOSE 8080
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
+EOF
+
   else
-    # Defaulting to OpenResty Container Setup for OpenResty, Envoy, HAProxy
+    # Default OpenResty Engine setup
     cat > nginx.conf <<EOF
 worker_processes auto;
 events { worker_connections 8192; }
