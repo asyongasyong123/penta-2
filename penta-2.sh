@@ -517,10 +517,24 @@ EOF
 
   CLOUD_RUN_URL=$(gcloud run services describe "$CLOUD_RUN_SERVICE_NAME" --project="$PROJECT_ID" --region="$REGION" --format='value(status.url)')
   DOMAIN=$(echo "$CLOUD_RUN_URL" | sed 's|https://||')
+  CANONICAL_LINK="https://$DOMAIN"
 
-  echo -e "\n${GREEN}✅ DEPLOYED SUCCESSFULLY!${NC}"
-  echo -e "🔹 HOST: $DOMAIN"
-  read -p 'Press [Enter] to return...'
+  clear
+  echo -e "\n${CYAN}=========================================${NC}"
+  echo -e "${GREEN}✅ DEPLOYMENT SUCCESS! (${ENGINE^^})${NC}"
+  echo -e "${CYAN}=========================================${NC}"
+  echo -e "${GREEN}🔗 SHORT LINK:${NC} $CANONICAL_LINK"
+  echo -e "${GREEN}🌐 NETMOD HOST:${NC} $DOMAIN"
+  echo -e "${GREEN}💚 HEALTH CHECK:${NC} $CANONICAL_LINK/health"
+  echo -e "${CYAN}=========================================${NC}"
+  echo -e "${YELLOW}🔑 PROTOCOL PATHS & CREDENTIALS:${NC}"
+  echo "🔹 Trojan WS:        /trojan-ws        | Pass: gcp-xray"
+  echo "🔹 VLESS WS:         /vless-ws         | UUID: a1b2c3d4-5678-40ef-98ab-cdef01234567"
+  echo "🔹 VLESS XHTTP:      /xhttp            | UUID: a1b2c3d4-5678-40ef-98ab-cdef01234567"
+  echo "🔹 VLESS HTTPUpgrade: /httpupgrade      | UUID: a1b2c3d4-5678-40ef-98ab-cdef01234567"
+  echo -e "${CYAN}=========================================${NC}"
+
+  read -p $'\nPress [Enter] to return to Main Menu...'
 }
 
 while true; do
@@ -529,12 +543,15 @@ while true; do
   echo "GCP-XRAY AUTO-TUNED DEPLOYER MENU"
   echo "======================================"
   echo "1) Deploy New Service"
-  echo "2) List Services"
+  echo "2) List All Services & Full Details"
   echo "3) Exit"
-  read -p "Select [1-3]: " MENU_CHOICE
+  echo "======================================"
+  read -p "Select Option [1-3]: " MENU_CHOICE
+
   case $MENU_CHOICE in
     1) deploy_new_service ;;
     2) list_deployed_services ;;
-    3) exit 0 ;;
+    3) echo -e "\n👋 Goodbye!"; exit 0 ;;
+    *) echo -e "${RED}❌ Enter 1/2/3 only${NC}"; sleep 2 ;;
   esac
 done
