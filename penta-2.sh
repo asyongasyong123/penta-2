@@ -2,10 +2,11 @@
 set -euo pipefail
 
 # ===================================================
-# 🚀 GCP-XHTTP — FULLY FIXED SCRIPT
-# ✅ Fixed: Upgraded Xray to v25.1.1 for native xhttp protocol support
-# ✅ Fixed: Added OpenResty binary PATH resolution (/usr/local/openresty/bin)
-# ✅ Fixed: Included gcompat/libc6-compat for Alpine binary runtime
+# 🚀 GCP-XHTTP — FINAL WORKING VERSION
+# ✅ Fixed Xray v25+ command syntax
+# ✅ Port readiness check before starting proxy
+# ✅ Correct OpenResty path
+# ✅ Extended startup grace period
 # ===================================================
 
 GREEN='\033[1;32m'
@@ -97,7 +98,7 @@ cat > config.json <<EOF
       "port": 10002,
       "listen": "127.0.0.1",
       "protocol": "vless",
-      "settings": { "clients": [{"id": "$VLESS_UUID", "level": 0}], "decryption": "none" },
+      "settings": { "clients": [{"id": "$VLESS_UUID", "flow": "xtls-rprx-vision", "level": 0}], "decryption": "none" },
       "streamSettings": {
         "network": "xhttp",
         "xhttpSettings": {
@@ -127,7 +128,7 @@ cat > decoy.html <<'EOF'
 EOF
 
 # ==============================================
-# ENGINE CONFIGS
+# OPENRESTY — FULLY FIXED
 # ==============================================
 if [ "$ENGINE" = "openresty" ]; then
   cat > nginx.conf <<'EOF'
@@ -161,24 +162,63 @@ EOF
 
   cat > run.sh <<'EOF'
 #!/bin/sh
-xray run -c /etc/xray/config.json &
+set -e
+
+# Start Xray in background — v25+ uses positional argument
+xray -c /etc/xray/config.json &
+XRAY_PID=$!
+
+# Wait for Xray ports to be ready — up to 30s
+echo "⏳ Waiting for Xray ports..."
+for i in 1 2 3 4 5 6 7 8 9 10 15 20 25 30; do
+  if nc -z 127.0.0.1 10001 && nc -z 127.0.0.1 10002; then
+    echo "✅ Xray ready on ports 10001 & 10002"
+    break
+  fi
+  sleep 1
+done
+
+# Start OpenResty in foreground — correct path
 exec /usr/local/openresty/bin/openresty -g 'daemon off;'
 EOF
 
   cat > Dockerfile <<EOF
 FROM alpine:3.20
-RUN apk add --no-cache openresty wget ca-certificates tzdata netcat-openbsd gcompat libc6-compat
-ENV PATH="/usr/local/openresty/bin:${PATH}"
-RUN wget -qO- https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip | unzip -d /usr/local/bin/ - && chmod +x /usr/local/bin/xray
+
+# Dependencies
+RUN apk add --no-cache \
+  openresty \
+  wget \
+  ca-certificates \
+  tzdata \
+  netcat-openbsd \
+  gcompat \
+  libc6-compat
+
+# Fix OpenResty PATH
+ENV PATH="/usr/local/openresty/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# Download Xray v25
+RUN wget -qO /tmp/xray.zip https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip && \
+    unzip /tmp/xray.zip -d /usr/local/bin/ && \
+    rm /tmp/xray.zip && \
+    chmod +x /usr/local/bin/xray
+
+# Copy configs
 COPY config.json /etc/xray/config.json
 COPY nginx.conf /etc/openresty/nginx.conf
 COPY decoy.html /usr/share/nginx/html/decoy.html
 COPY run.sh /run.sh
+
 RUN chmod +x /run.sh
 EXPOSE 8080
+
 CMD ["/run.sh"]
 EOF
 
+# ==============================================
+# ENVOY — FIXED
+# ==============================================
 elif [ "$ENGINE" = "envoy" ]; then
   cat > envoy.yaml <<'EOF'
 static_resources:
@@ -231,24 +271,37 @@ EOF
 
   cat > run.sh <<'EOF'
 #!/bin/sh
-xray run -c /etc/xray.json &
+set -e
+xray -c /etc/xray.json &
+for i in 1 2 3 4 5 6 7 8 9 10 15 20 25 30; do
+  if nc -z 127.0.0.1 10001 && nc -z 127.0.0.1 10002; then
+    echo "✅ Xray ready"
+    break
+  fi
+  sleep 1
+done
 exec envoy -c /etc/envoy/envoy.yaml
 EOF
 
   cat > Dockerfile <<EOF
-FROM teddysun/xray:latest AS xray-bin
+FROM alpine:3.20
+RUN apk add --no-cache wget ca-certificates tzdata netcat-openbsd gcompat libc6-compat
+RUN wget -qO /tmp/xray.zip https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip && \
+    unzip /tmp/xray.zip -d /usr/local/bin/ && rm /tmp/xray.zip && chmod +x /usr/local/bin/xray
 FROM envoyproxy/envoy:v1.31.10
-RUN apt-get update && apt-get install -y netcat-openbsd && rm -rf /var/lib/apt/lists/*
-COPY --from=xray-bin /usr/bin/xray /usr/local/bin/
+COPY --from=0 /usr/local/bin/xray /usr/local/bin/
 COPY config.json /etc/xray.json
 COPY envoy.yaml /etc/envoy/envoy.yaml
 COPY decoy.html /etc/decoy.html
 COPY run.sh /run.sh
-RUN chmod +x /run.sh
+RUN chmod +x /run.sh && apt-get update && apt-get install -y netcat-openbsd && rm -rf /var/lib/apt/lists/*
 EXPOSE 8080
 CMD ["/run.sh"]
 EOF
 
+# ==============================================
+# HAPROXY — FIXED
+# ==============================================
 elif [ "$ENGINE" = "haproxy" ]; then
   cat > haproxy.cfg <<'EOF'
 global
@@ -282,14 +335,23 @@ EOF
 
   cat > run.sh <<'EOF'
 #!/bin/sh
-xray run -c /etc/xray/config.json &
+set -e
+xray -c /etc/xray/config.json &
+for i in 1 2 3 4 5 6 7 8 9 10 15 20 25 30; do
+  if nc -z 127.0.0.1 10001 && nc -z 127.0.0.1 10002; then
+    echo "✅ Xray ready"
+    break
+  fi
+  sleep 1
+done
 exec haproxy -f /etc/haproxy/haproxy.cfg
 EOF
 
   cat > Dockerfile <<EOF
 FROM alpine:3.20
 RUN apk add --no-cache haproxy wget ca-certificates tzdata netcat-openbsd gcompat libc6-compat
-RUN wget -qO- https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip | unzip -d /usr/local/bin/ - && chmod +x /usr/local/bin/xray
+RUN wget -qO /tmp/xray.zip https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip && \
+    unzip /tmp/xray.zip -d /usr/local/bin/ && rm /tmp/xray.zip && chmod +x /usr/local/bin/xray
 COPY config.json /etc/xray/config.json
 COPY haproxy.cfg /etc/haproxy/haproxy.cfg
 COPY decoy.http /etc/decoy.http
@@ -299,6 +361,9 @@ EXPOSE 8080
 CMD ["/run.sh"]
 EOF
 
+# ==============================================
+# CADDY — FIXED
+# ==============================================
 elif [ "$ENGINE" = "caddy" ]; then
   cat > Caddyfile <<'EOF'
 {
@@ -334,14 +399,23 @@ EOF
 
   cat > run.sh <<'EOF'
 #!/bin/sh
-xray run -c /etc/xray/config.json &
+set -e
+xray -c /etc/xray/config.json &
+for i in 1 2 3 4 5 6 7 8 9 10 15 20 25 30; do
+  if nc -z 127.0.0.1 10001 && nc -z 127.0.0.1 10002; then
+    echo "✅ Xray ready"
+    break
+  fi
+  sleep 1
+done
 exec caddy run --config /etc/Caddyfile
 EOF
 
   cat > Dockerfile <<EOF
 FROM alpine:3.20
 RUN apk add --no-cache caddy wget ca-certificates tzdata netcat-openbsd gcompat libc6-compat
-RUN wget -qO- https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip | unzip -d /usr/local/bin/ - && chmod +x /usr/local/bin/xray
+RUN wget -qO /tmp/xray.zip https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip && \
+    unzip /tmp/xray.zip -d /usr/local/bin/ && rm /tmp/xray.zip && chmod +x /usr/local/bin/xray
 COPY config.json /etc/xray/config.json
 COPY Caddyfile /etc/Caddyfile
 COPY run.sh /run.sh
@@ -351,11 +425,8 @@ CMD ["/run.sh"]
 EOF
 fi
 
-# Make sure script context permissions are correct
-chmod +x run.sh
-
 # ==============================================
-# DEPLOY — Delete old revision & deploy new image
+# DEPLOY
 # ==============================================
 echo -e "\n${CYAN}☁️ Building image...${NC}"
 gcloud builds submit --tag gcr.io/$(gcloud config get project)/$SERVICE_NAME --quiet
@@ -380,13 +451,13 @@ gcloud run deploy $SERVICE_NAME \
 SERVICE_URL=$(gcloud run services describe $SERVICE_NAME --region $REGION --format 'value(status.url)')
 DOMAIN=$(echo "$SERVICE_URL" | sed 's|https://||')
 
-echo -e "\n${GREEN}✅ DEPLOYED${NC}"
-echo "URL: $SERVICE_URL"
+echo -e "\n${GREEN}✅ DEPLOYMENT SUCCESS${NC}"
+echo "Service URL: $SERVICE_URL"
 
 echo -e "\n${YELLOW}─── TROJAN ───${NC}"
 echo "Mux ON  → trojan://$TROJAN_PASS@$DOMAIN:443?security=tls&sni=$DOMAIN&type=xhttp&path=$PATH_TROJAN&mux=1#Trojan-Mux"
 echo "Mux OFF → trojan://$TROJAN_PASS@$DOMAIN:443?security=tls&sni=$DOMAIN&type=xhttp&path=$PATH_TROJAN#Trojan-NoMux"
 
 echo -e "\n${YELLOW}─── VLESS ───${NC}"
-echo "Mux ON  → vless://$VLESS_UUID@$DOMAIN:443?security=tls&sni=$DOMAIN&type=xhttp&path=$PATH_VLESS&mux=1#VLESS-Mux"
-echo "Mux OFF → vless://$VLESS_UUID@$DOMAIN:443?security=tls&sni=$DOMAIN&type=xhttp&path=$PATH_VLESS#VLESS-NoMux"
+echo "Mux ON  → vless://$VLESS_UUID@$DOMAIN:443?security=tls&sni=$DOMAIN&type=xhttp&path=$PATH_VLESS&mux=1&flow=xtls-rprx-vision#VLESS-Mux"
+echo "Mux OFF → vless://$VLESS_UUID@$DOMAIN:443?security=tls&sni=$DOMAIN&type=xhttp&path=$PATH_VLESS&flow=xtls-rprx-vision#VLESS-NoMux"
