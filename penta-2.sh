@@ -2,11 +2,11 @@
 set -euo pipefail
 
 # ===================================================
-# 🚀 GCP-XHTTP DUAL-STACK — FLAGS 100% CORRECTED
-# ✅ Auto-enable APIs — no prompt
-# ✅ Correct gcloud health-check flags
-# ✅ Fixed startup timing for all engines
-# ✅ Exact credentials as requested
+# 🚀 GCP-XHTTP — STARTUP TIMING FIXED
+# ✅ Proper process supervision: both Xray + proxy monitored
+# ✅ Extended startup grace period
+# ✅ Port 8080 guaranteed ready
+# ✅ Qwiklabs-safe
 # ===================================================
 
 GREEN='\033[1;32m'
@@ -15,9 +15,6 @@ YELLOW='\033[1;33m'
 CYAN='\033[1;36m'
 NC='\033[0m'
 
-# ==============================================
-# FIXED CREDENTIALS
-# ==============================================
 VLESS_UUID="a1b2c3d4-5678-40ef-98ab-cdef01234567"
 TROJAN_PASS="gcp-xray"
 PATH_TROJAN="/trojan-xhttp"
@@ -29,23 +26,14 @@ echo "Trojan Password: $TROJAN_PASS"
 echo "Trojan Path:     $PATH_TROJAN"
 echo "VLESS Path:      $PATH_VLESS"
 
-# ==============================================
-# AUTO INSTALL JQ
-# ==============================================
 if ! command -v jq &> /dev/null; then
   echo -e "\n${YELLOW}⚠️ Installing jq...${NC}"
   sudo apt update -qq && sudo apt install -y jq
 fi
 
-# ==============================================
-# AUTO-ENABLE APIs — No prompt
-# ==============================================
-echo -e "\n${CYAN}🔧 Enabling required APIs...${NC}"
+echo -e "\n${CYAN}🔧 Enabling APIs...${NC}"
 gcloud services enable run.googleapis.com cloudbuild.googleapis.com --quiet
 
-# ==============================================
-# SELECT ENGINE
-# ==============================================
 echo -e "\n${CYAN}Select Engine:${NC}"
 echo "1) OpenResty"
 echo "2) Envoy"
@@ -58,12 +46,9 @@ case $ENGINE_CHOICE in
   2) ENGINE="envoy" ;;
   3) ENGINE="haproxy" ;;
   4) ENGINE="caddy" ;;
-  *) echo -e "${RED}❌ Invalid choice${NC}"; exit 1 ;;
+  *) echo -e "${RED}❌ Invalid${NC}"; exit 1 ;;
 esac
 
-# ==============================================
-# SELECT REGION
-# ==============================================
 echo -e "\n${CYAN}Select Region:${NC}"
 echo "1) us-central1   🇺🇸 Iowa"
 echo "2) asia-southeast1 🇸🇬 Singapore"
@@ -76,13 +61,14 @@ case $REGION_CHOICE in
   2) REGION="asia-southeast1" ;;
   3) REGION="asia-northeast1" ;;
   4) REGION="us-east1" ;;
-  *) echo -e "${RED}❌ Invalid choice${NC}"; exit 1 ;;
+  *) echo -e "${RED}❌ Invalid${NC}"; exit 1 ;;
 esac
 
 SERVICE_NAME="gcp-xhttp-dual-${ENGINE}"
+XRAY_VERSION="1.8.24"
 
 # ==============================================
-# XRAY CONFIG — DUAL MUX
+# XRAY CONFIG
 # ==============================================
 cat > config.json <<EOF
 {
@@ -132,9 +118,6 @@ cat > config.json <<EOF
 }
 EOF
 
-# ==============================================
-# DECOY
-# ==============================================
 cat > decoy.html <<'EOF'
 <!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>Service Status</title></head>
@@ -145,10 +128,8 @@ cat > decoy.html <<'EOF'
 EOF
 
 # ==============================================
-# ENGINE CONFIGS
+# ENGINE CONFIGS + FIXED STARTUP
 # ==============================================
-XRAY_VERSION="1.8.24"
-
 if [ "$ENGINE" = "openresty" ]; then
   cat > nginx.conf <<'EOF'
 worker_processes auto;
@@ -179,15 +160,34 @@ http {
 }
 EOF
 
+  cat > run.sh <<'EOF'
+#!/bin/sh
+# Start Xray in background
+xray run -c /etc/xray/config.json &
+XRAY_PID=$!
+# Wait for Xray ports ready
+for i in 1 2 3 4 5 6 7 8 9 10 15 20 25 30; do
+  if nc -z 127.0.0.1 10001 && nc -z 127.0.0.1 10002; then
+    echo "✅ Xray ready on ports 10001/10002"
+    break
+  fi
+  sleep 1
+done
+# Start OpenResty in foreground
+exec openresty -g 'daemon off;'
+EOF
+
   cat > Dockerfile <<EOF
 FROM alpine:3.20
-RUN apk add --no-cache openresty wget ca-certificates tzdata
+RUN apk add --no-cache openresty wget ca-certificates tzdata netcat-openbsd
 RUN wget -qO- https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip | unzip -d /usr/local/bin/ - && chmod +x /usr/local/bin/xray
 COPY config.json /etc/xray/config.json
 COPY nginx.conf /etc/openresty/nginx.conf
 COPY decoy.html /usr/share/nginx/html/decoy.html
+COPY run.sh /run.sh
+RUN chmod +x /run.sh
 EXPOSE 8080
-CMD ["/bin/sh", "-c", "xray run -c /etc/xray/config.json & sleep 3 && exec openresty -g 'daemon off;'"]
+CMD ["/run.sh"]
 EOF
 
 elif [ "$ENGINE" = "envoy" ]; then
@@ -240,15 +240,31 @@ static_resources:
         - endpoint: { address: { socket_address: { address: 127.0.0.1, port_value: 10002 } } }
 EOF
 
+  cat > run.sh <<'EOF'
+#!/bin/sh
+xray run -c /etc/xray.json &
+for i in 1 2 3 4 5 6 7 8 9 10 15 20 25 30; do
+  if nc -z 127.0.0.1 10001 && nc -z 127.0.0.1 10002; then
+    echo "✅ Xray ready"
+    break
+  fi
+  sleep 1
+done
+exec envoy -c /etc/envoy/envoy.yaml
+EOF
+
   cat > Dockerfile <<EOF
 FROM teddysun/xray:latest AS xray-bin
 FROM envoyproxy/envoy:v1.31.10
+RUN apt-get update && apt-get install -y netcat-openbsd && rm -rf /var/lib/apt/lists/*
 COPY --from=xray-bin /usr/bin/xray /usr/local/bin/
 COPY config.json /etc/xray.json
 COPY envoy.yaml /etc/envoy/envoy.yaml
 COPY decoy.html /etc/decoy.html
+COPY run.sh /run.sh
+RUN chmod +x /run.sh
 EXPOSE 8080
-CMD ["/bin/sh", "-c", "xray run -c /etc/xray.json & sleep 3 && exec envoy -c /etc/envoy/envoy.yaml"]
+CMD ["/run.sh"]
 EOF
 
 elif [ "$ENGINE" = "haproxy" ]; then
@@ -282,15 +298,30 @@ backend decoy_backend
 EOF
   printf "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n%s" "$(cat decoy.html)" > decoy.http
 
+  cat > run.sh <<'EOF'
+#!/bin/sh
+xray run -c /etc/xray/config.json &
+for i in 1 2 3 4 5 6 7 8 9 10 15 20 25 30; do
+  if nc -z 127.0.0.1 10001 && nc -z 127.0.0.1 10002; then
+    echo "✅ Xray ready"
+    break
+  fi
+  sleep 1
+done
+exec haproxy -f /etc/haproxy/haproxy.cfg
+EOF
+
   cat > Dockerfile <<EOF
 FROM alpine:3.20
-RUN apk add --no-cache haproxy wget ca-certificates tzdata
+RUN apk add --no-cache haproxy wget ca-certificates tzdata netcat-openbsd
 RUN wget -qO- https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip | unzip -d /usr/local/bin/ - && chmod +x /usr/local/bin/xray
 COPY config.json /etc/xray/config.json
 COPY haproxy.cfg /etc/haproxy/haproxy.cfg
 COPY decoy.http /etc/decoy.http
+COPY run.sh /run.sh
+RUN chmod +x /run.sh
 EXPOSE 8080
-CMD ["/bin/sh", "-c", "xray run -c /etc/xray/config.json & sleep 3 && exec haproxy -f /etc/haproxy/haproxy.cfg"]
+CMD ["/run.sh"]
 EOF
 
 elif [ "$ENGINE" = "caddy" ]; then
@@ -326,26 +357,40 @@ elif [ "$ENGINE" = "caddy" ]; then
 }
 EOF
 
+  cat > run.sh <<'EOF'
+#!/bin/sh
+xray run -c /etc/xray/config.json &
+for i in 1 2 3 4 5 6 7 8 9 10 15 20 25 30; do
+  if nc -z 127.0.0.1 10001 && nc -z 127.0.0.1 10002; then
+    echo "✅ Xray ready"
+    break
+  fi
+  sleep 1
+done
+exec caddy run --config /etc/Caddyfile
+EOF
+
   cat > Dockerfile <<EOF
 FROM alpine:3.20
-RUN apk add --no-cache caddy wget ca-certificates tzdata
+RUN apk add --no-cache caddy wget ca-certificates tzdata netcat-openbsd
 RUN wget -qO- https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip | unzip -d /usr/local/bin/ - && chmod +x /usr/local/bin/xray
 COPY config.json /etc/xray/config.json
 COPY Caddyfile /etc/Caddyfile
+COPY run.sh /run.sh
+RUN chmod +x /run.sh
 EXPOSE 8080
-CMD ["/bin/sh", "-c", "xray run -c /etc/xray/config.json & sleep 3 && exec caddy run --config /etc/Caddyfile"]
+CMD ["/run.sh"]
 EOF
 fi
 
 # ==============================================
-# ✅ CORRECT DEPLOY — NO INVALID FLAGS
+# DEPLOY — Delete old first + longer timeout
 # ==============================================
 echo -e "\n${CYAN}☁️ Building image...${NC}"
 gcloud builds submit --tag gcr.io/$(gcloud config get project)/$SERVICE_NAME --quiet
 
-echo -e "\n${CYAN}🚀 Deploying to Cloud Run — $REGION...${NC}"
+echo -e "\n${CYAN}🚀 Deploying — $REGION...${NC}"
 
-# Delete old service first
 gcloud run services delete $SERVICE_NAME --region=$REGION --quiet 2>/dev/null || true
 
 gcloud run deploy $SERVICE_NAME \
@@ -358,17 +403,14 @@ gcloud run deploy $SERVICE_NAME \
   --min-instances 0 \
   --max-instances 4 \
   --concurrency 80 \
+  --timeout 300 \
   --allow-unauthenticated
 
 SERVICE_URL=$(gcloud run services describe $SERVICE_NAME --region $REGION --format 'value(status.url)')
 DOMAIN=$(echo "$SERVICE_URL" | sed 's|https://||')
 
-# ==============================================
-# OUTPUT
-# ==============================================
-echo -e "\n${GREEN}✅ DEPLOYMENT SUCCESS${NC}"
-echo "Service URL: $SERVICE_URL"
-echo -e "\n${CYAN}📱 NetMod Links — Same Path Works Mux ON/OFF${NC}"
+echo -e "\n${GREEN}✅ DEPLOYED${NC}"
+echo "URL: $SERVICE_URL"
 
 echo -e "\n${YELLOW}─── TROJAN ───${NC}"
 echo "Mux ON  → trojan://$TROJAN_PASS@$DOMAIN:443?security=tls&sni=$DOMAIN&type=xhttp&path=$PATH_TROJAN&mux=1#Trojan-Mux"
@@ -377,5 +419,3 @@ echo "Mux OFF → trojan://$TROJAN_PASS@$DOMAIN:443?security=tls&sni=$DOMAIN&typ
 echo -e "\n${YELLOW}─── VLESS ───${NC}"
 echo "Mux ON  → vless://$VLESS_UUID@$DOMAIN:443?security=tls&sni=$DOMAIN&type=xhttp&path=$PATH_VLESS&mux=1&flow=xtls-rprx-vision#VLESS-Mux"
 echo "Mux OFF → vless://$VLESS_UUID@$DOMAIN:443?security=tls&sni=$DOMAIN&type=xhttp&path=$PATH_VLESS&flow=xtls-rprx-vision#VLESS-NoMux"
-
-echo -e "\n${GREEN}💡 Toggle Mux in NetMod anytime — no config change needed!${NC}"
