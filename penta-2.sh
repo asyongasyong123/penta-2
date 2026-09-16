@@ -2,10 +2,11 @@
 set -euo pipefail
 
 # ===================================================
-# 🚀 GCP-XHTTP DUAL-STACK DEPLOYER — MUX AUTO ON/OFF
-# ✅ ENGINES: OPENRESTY, ENVOY, HAPROXY, CADDY
-# ✅ SAME PATH = Works with Mux.Cool ON or OFF automatically
-# ✅ FIXED CREDENTIALS as requested
+# 🚀 GCP-XHTTP DUAL-STACK — ALL ENGINES FIXED
+# ✅ AUTO-YES: Automatically enables APIs
+# ✅ Fixed startup timing for ALL engines
+# ✅ Health check path + extended timeout
+# ✅ Fixed credentials as requested
 # ===================================================
 
 GREEN='\033[1;32m'
@@ -15,7 +16,7 @@ CYAN='\033[1;36m'
 NC='\033[0m'
 
 # ==============================================
-# FIXED CREDENTIALS — NO RANDOMIZATION
+# FIXED CREDENTIALS
 # ==============================================
 VLESS_UUID="a1b2c3d4-5678-40ef-98ab-cdef01234567"
 TROJAN_PASS="gcp-xray"
@@ -29,7 +30,7 @@ echo "Trojan Path:     $PATH_TROJAN"
 echo "VLESS Path:      $PATH_VLESS"
 
 # ==============================================
-# AUTO INSTALL JQ IF MISSING
+# AUTO INSTALL JQ
 # ==============================================
 if ! command -v jq &> /dev/null; then
   echo -e "\n${YELLOW}⚠️ Installing jq...${NC}"
@@ -37,10 +38,16 @@ if ! command -v jq &> /dev/null; then
 fi
 
 # ==============================================
+# AUTO-ENABLE APIs — No prompt shown
+# ==============================================
+echo -e "\n${CYAN}🔧 Checking & enabling required APIs...${NC}"
+gcloud services enable run.googleapis.com cloudbuild.googleapis.com --quiet || true
+
+# ==============================================
 # SELECT ENGINE
 # ==============================================
 echo -e "\n${CYAN}Select Reverse-Proxy Engine:${NC}"
-echo "1) OpenResty (Nginx-based)"
+echo "1) OpenResty"
 echo "2) Envoy"
 echo "3) HAProxy"
 echo "4) Caddy"
@@ -79,95 +86,43 @@ SERVICE_NAME="gcp-xhttp-dual-${ENGINE}"
 # ==============================================
 cat > config.json <<EOF
 {
-  "log": {
-    "loglevel": "warning",
-    "access": "none",
-    "error": "none"
-  },
-  "dns": {
-    "servers": ["8.8.8.8", "8.8.4.4", "1.1.1.1"],
-    "strategy": "UseIPv4"
-  },
-  "policy": {
-    "levels": {
-      "0": {
-        "handshake": 2,
-        "connIdle": 3600,
-        "bufferSize": 524288
-      }
-    }
-  },
+  "log": { "loglevel": "warning", "access": "none", "error": "none" },
+  "dns": { "servers": ["8.8.8.8", "8.8.4.4", "1.1.1.1"], "strategy": "UseIPv4" },
+  "policy": { "levels": { "0": { "handshake": 2, "connIdle": 3600, "bufferSize": 524288 } } },
   "inbounds": [
     {
       "tag": "trojan-xhttp",
       "port": 10001,
       "listen": "127.0.0.1",
       "protocol": "trojan",
-      "settings": {
-        "clients": [{"password": "$TROJAN_PASS", "level": 0}]
-      },
+      "settings": { "clients": [{"password": "$TROJAN_PASS", "level": 0}] },
       "streamSettings": {
         "network": "xhttp",
         "xhttpSettings": {
           "path": "$PATH_TROJAN",
-          "mux": {
-            "enabled": true,
-            "concurrency": 4,
-            "maxConnections": 4,
-            "padding": true
-          },
-          "no_mux": {
-            "enabled": true,
-            "concurrency": 1,
-            "padding": false
-          }
+          "mux": { "enabled": true, "concurrency": 4, "maxConnections": 4, "padding": true },
+          "no_mux": { "enabled": true, "concurrency": 1, "padding": false }
         },
-        "sockopt": {
-          "tcpNoDelay": true,
-          "tcpKeepAliveInterval": 30
-        }
+        "sockopt": { "tcpNoDelay": true, "tcpKeepAliveInterval": 30 }
       },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": ["http", "tls", "quic"],
-        "routeOnly": true
-      }
+      "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"], "routeOnly": true }
     },
     {
       "tag": "vless-xhttp",
       "port": 10002,
       "listen": "127.0.0.1",
       "protocol": "vless",
-      "settings": {
-        "clients": [{"id": "$VLESS_UUID", "flow": "xtls-rprx-vision", "level": 0}],
-        "decryption": "none"
-      },
+      "settings": { "clients": [{"id": "$VLESS_UUID", "flow": "xtls-rprx-vision", "level": 0}], "decryption": "none" },
       "streamSettings": {
         "network": "xhttp",
         "xhttpSettings": {
           "path": "$PATH_VLESS",
-          "mux": {
-            "enabled": true,
-            "concurrency": 4,
-            "maxConnections": 4,
-            "padding": true
-          },
-          "no_mux": {
-            "enabled": true,
-            "concurrency": 1,
-            "padding": false
-          }
+          "mux": { "enabled": true, "concurrency": 4, "maxConnections": 4, "padding": true },
+          "no_mux": { "enabled": true, "concurrency": 1, "padding": false }
         },
-        "sockopt": {
-          "tcpNoDelay": true,
-          "tcpKeepAliveInterval": 30
-        }
+        "sockopt": { "tcpNoDelay": true, "tcpKeepAliveInterval": 30 }
       },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": ["http", "tls", "quic"],
-        "routeOnly": true
-      }
+      "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"], "routeOnly": true }
     }
   ],
   "outbounds": [
@@ -182,48 +137,32 @@ EOF
 # ==============================================
 cat > decoy.html <<'EOF'
 <!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Service Status</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,sans-serif;background:#f5f7fa;color:#333;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
-.card{background:#fff;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,.08);padding:32px;max-width:480px;width:100%;text-align:center}
-h1{font-size:22px;margin-bottom:12px;color:#1a1a1a}
-p{color:#666;line-height:1.6;margin-bottom:8px}
-.status{display:inline-flex;align-items:center;gap:8px;background:#e8f5e9;color:#2e7d32;padding:6px 14px;border-radius:20px;font-weight:500;margin:16px 0}
-.dot{width:8px;height:8px;background:#2e7d32;border-radius:50%}
-</style>
-</head>
-<body>
-<div class="card">
+<html><head><meta charset="UTF-8"><title>Service Status</title></head>
+<body style="font-family:system-ui;padding:2rem;text-align:center">
 <h1>All Systems Operational</h1>
-<span class="status"><span class="dot"></span> Running Normally</span>
-<p>Service is online and available.</p>
-</div>
-</body>
-</html>
+<p>Service online — latency normal</p>
+</body></html>
 EOF
 
 # ==============================================
 # ENGINE CONFIGS
 # ==============================================
+XRAY_VERSION="1.8.24"
+
 if [ "$ENGINE" = "openresty" ]; then
   cat > nginx.conf <<'EOF'
 worker_processes auto;
 worker_rlimit_nofile 10240;
 events { worker_connections 4096; multi_accept on; use epoll; }
 http {
-  sendfile on; tcp_nodelay on; tcp_nopush off;
+  sendfile on; tcp_nodelay on;
   keepalive_timeout 3600; keepalive_requests 100000;
   client_max_body_size 0; proxy_max_temp_file_size 0;
   proxy_connect_timeout 10s; proxy_send_timeout 3600s; proxy_read_timeout 3600s;
-  proxy_buffering off; proxy_request_buffering off; proxy_socket_keepalive on;
-  proxy_http_version 1.1; proxy_cache off;
+  proxy_buffering off; proxy_request_buffering off; proxy_http_version 1.1;
   server {
     listen 8080;
+    root /usr/share/nginx/html;
     location /health { return 200 "OK\n"; }
     location /trojan-xhttp {
       proxy_pass http://127.0.0.1:10001;
@@ -235,9 +174,20 @@ http {
       proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr;
       proxy_read_timeout 3600s; proxy_send_timeout 3600s;
     }
-    location / { root /usr/share/nginx/html; try_files $uri /decoy.html; }
+    location / { try_files $uri /decoy.html; }
   }
 }
+EOF
+
+  cat > Dockerfile <<EOF
+FROM alpine:3.20
+RUN apk add --no-cache openresty wget ca-certificates tzdata
+RUN wget -qO- https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip | unzip -d /usr/local/bin/ - && chmod +x /usr/local/bin/xray
+COPY config.json /etc/xray/config.json
+COPY nginx.conf /etc/openresty/nginx.conf
+COPY decoy.html /usr/share/nginx/html/decoy.html
+EXPOSE 8080
+CMD ["/bin/sh", "-c", "xray run -c /etc/xray/config.json & sleep 3 && exec openresty -g 'daemon off;'"]
 EOF
 
 elif [ "$ENGINE" = "envoy" ]; then
@@ -290,6 +240,17 @@ static_resources:
         - endpoint: { address: { socket_address: { address: 127.0.0.1, port_value: 10002 } } }
 EOF
 
+  cat > Dockerfile <<EOF
+FROM teddysun/xray:latest AS xray-bin
+FROM envoyproxy/envoy:v1.31.10
+COPY --from=xray-bin /usr/bin/xray /usr/local/bin/
+COPY config.json /etc/xray.json
+COPY envoy.yaml /etc/envoy/envoy.yaml
+COPY decoy.html /etc/decoy.html
+EXPOSE 8080
+CMD ["/bin/sh", "-c", "xray run -c /etc/xray.json & sleep 3 && exec envoy -c /etc/envoy/envoy.yaml"]
+EOF
+
 elif [ "$ENGINE" = "haproxy" ]; then
   cat > haproxy.cfg <<'EOF'
 global
@@ -320,6 +281,17 @@ backend decoy_backend
   errorfile 200 /etc/decoy.http
 EOF
   printf "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n%s" "$(cat decoy.html)" > decoy.http
+
+  cat > Dockerfile <<EOF
+FROM alpine:3.20
+RUN apk add --no-cache haproxy wget ca-certificates tzdata
+RUN wget -qO- https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip | unzip -d /usr/local/bin/ - && chmod +x /usr/local/bin/xray
+COPY config.json /etc/xray/config.json
+COPY haproxy.cfg /etc/haproxy/haproxy.cfg
+COPY decoy.http /etc/decoy.http
+EXPOSE 8080
+CMD ["/bin/sh", "-c", "xray run -c /etc/xray/config.json & sleep 3 && exec haproxy -f /etc/haproxy/haproxy.cfg"]
+EOF
 
 elif [ "$ENGINE" = "caddy" ]; then
   cat > Caddyfile <<'EOF'
@@ -353,50 +325,7 @@ elif [ "$ENGINE" = "caddy" ]; then
   }
 }
 EOF
-fi
 
-# ==============================================
-# DOCKERFILE
-# ==============================================
-XRAY_VERSION="1.8.24"
-
-if [ "$ENGINE" = "openresty" ]; then
-  cat > Dockerfile <<EOF
-FROM alpine:3.20
-RUN apk add --no-cache openresty wget ca-certificates tzdata
-RUN wget -qO- https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip | unzip -d /usr/local/bin/ - && chmod +x /usr/local/bin/xray
-COPY config.json /etc/xray/config.json
-COPY nginx.conf /etc/openresty/nginx.conf
-COPY decoy.html /usr/share/nginx/html/decoy.html
-EXPOSE 8080
-CMD ["/bin/sh", "-c", "xray run -c /etc/xray/config.json & exec openresty -g 'daemon off;'"]
-EOF
-
-elif [ "$ENGINE" = "envoy" ]; then
-  cat > Dockerfile <<EOF
-FROM teddysun/xray:latest AS xray-bin
-FROM envoyproxy/envoy:v1.31.10
-COPY --from=xray-bin /usr/bin/xray /usr/local/bin/
-COPY config.json /etc/xray.json
-COPY envoy.yaml /etc/envoy/envoy.yaml
-COPY decoy.html /etc/decoy.html
-EXPOSE 8080
-CMD ["/bin/sh", "-c", "xray run -c /etc/xray.json & sleep 2 && exec envoy -c /etc/envoy/envoy.yaml"]
-EOF
-
-elif [ "$ENGINE" = "haproxy" ]; then
-  cat > Dockerfile <<EOF
-FROM alpine:3.20
-RUN apk add --no-cache haproxy wget ca-certificates tzdata
-RUN wget -qO- https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip | unzip -d /usr/local/bin/ - && chmod +x /usr/local/bin/xray
-COPY config.json /etc/xray/config.json
-COPY haproxy.cfg /etc/haproxy/haproxy.cfg
-COPY decoy.http /etc/decoy.http
-EXPOSE 8080
-CMD ["/bin/sh", "-c", "xray run -c /etc/xray/config.json & exec haproxy -f /etc/haproxy/haproxy.cfg"]
-EOF
-
-elif [ "$ENGINE" = "caddy" ]; then
   cat > Dockerfile <<EOF
 FROM alpine:3.20
 RUN apk add --no-cache caddy wget ca-certificates tzdata
@@ -404,15 +333,17 @@ RUN wget -qO- https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSIO
 COPY config.json /etc/xray/config.json
 COPY Caddyfile /etc/Caddyfile
 EXPOSE 8080
-CMD ["/bin/sh", "-c", "xray run -c /etc/xray/config.json & exec caddy run --config /etc/Caddyfile"]
+CMD ["/bin/sh", "-c", "xray run -c /etc/xray/config.json & sleep 3 && exec caddy run --config /etc/Caddyfile"]
 EOF
 fi
 
 # ==============================================
-# DEPLOY TO CLOUD RUN
+# DEPLOY — with health check fixes
 # ==============================================
-echo -e "\n${CYAN}☁️ Building & Deploying to Cloud Run — $REGION...${NC}"
-gcloud builds submit --tag gcr.io/$(gcloud config get project)/$SERVICE_NAME
+echo -e "\n${CYAN}☁️ Building image...${NC}"
+gcloud builds submit --tag gcr.io/$(gcloud config get project)/$SERVICE_NAME --quiet
+
+echo -e "\n${CYAN}🚀 Deploying to Cloud Run — $REGION...${NC}"
 gcloud run deploy $SERVICE_NAME \
   --image gcr.io/$(gcloud config get project)/$SERVICE_NAME \
   --platform managed \
@@ -423,17 +354,32 @@ gcloud run deploy $SERVICE_NAME \
   --min-instances 0 \
   --max-instances 4 \
   --concurrency 80 \
+  --health-check-path /health \
+  --health-check-timeout 30 \
+  --no-allow-unauthenticated 2>/dev/null || \
+gcloud run deploy $SERVICE_NAME \
+  --image gcr.io/$(gcloud config get project)/$SERVICE_NAME \
+  --platform managed \
+  --region $REGION \
+  --port 8080 \
+  --memory 2Gi \
+  --cpu 1 \
+  --min-instances 0 \
+  --max-instances 4 \
+  --concurrency 80 \
+  --health-check-path /health \
+  --health-check-timeout 30 \
   --allow-unauthenticated
 
 SERVICE_URL=$(gcloud run services describe $SERVICE_NAME --region $REGION --format 'value(status.url)')
 DOMAIN=$(echo "$SERVICE_URL" | sed 's|https://||')
 
 # ==============================================
-# READY-TO-COPY NETMOD LINKS
+# READY-TO-COPY LINKS
 # ==============================================
 echo -e "\n${GREEN}✅ DEPLOYMENT SUCCESS${NC}"
 echo "Service URL: $SERVICE_URL"
-echo -e "\n${CYAN}📱 NetMod Links — Same Path Works Mux ON or OFF${NC}"
+echo -e "\n${CYAN}📱 NetMod Links — Same Path Works Mux ON/OFF${NC}"
 
 echo -e "\n${YELLOW}─── TROJAN ───${NC}"
 echo "Mux ON  → trojan://$TROJAN_PASS@$DOMAIN:443?security=tls&sni=$DOMAIN&type=xhttp&path=$PATH_TROJAN&mux=1#Trojan-Mux"
@@ -443,4 +389,4 @@ echo -e "\n${YELLOW}─── VLESS ───${NC}"
 echo "Mux ON  → vless://$VLESS_UUID@$DOMAIN:443?security=tls&sni=$DOMAIN&type=xhttp&path=$PATH_VLESS&mux=1&flow=xtls-rprx-vision#VLESS-Mux"
 echo "Mux OFF → vless://$VLESS_UUID@$DOMAIN:443?security=tls&sni=$DOMAIN&type=xhttp&path=$PATH_VLESS&flow=xtls-rprx-vision#VLESS-NoMux"
 
-echo -e "\n${GREEN}💡 Master Tip: Toggle Mux in NetMod anytime — no config change needed!${NC}"
+echo -e "\n${GREEN}💡 Toggle Mux in NetMod anytime — no config change needed!${NC}"
