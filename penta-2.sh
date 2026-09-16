@@ -3,39 +3,8 @@ set -Eeuo pipefail
 set -o errtrace
 
 # ============================================================================
-# GCP-XRAY CLOUD RUN DEPLOYER - FIXED
-# ============================================================================
-#
-# Engines:
-#   1) OpenResty
-#   2) Envoy
-#   3) HAProxy
-#   4) Caddy
-#   5) Sing-Box
-#
-# Credentials intentionally preserved from the original script:
-#   Trojan password: gcp-xray
-#   VLESS UUID:      a1b2c3d4-5678-40ef-98ab-cdef01234567
-#
-# Xray engines expose:
-#   /trojan-ws
-#   /vless-ws
-#   /xhttp
-#   /httpupgrade
-#
-# Sing-Box engine exposes:
-#   /trojan-ws
-#   /vless-ws
-#
-# Cloud Run:
-#   Artifact Registry
-#   Gen2
-#   --cpu-boost (FIXED; NOT --startup-cpu-boost)
-#   TCP startup probe
-#   Session affinity
-#   Conservative resource presets
-#   3600s timeout
-#
+# GCP-XRAY CLOUD RUN DEPLOYER — ORIGINAL PRESERVED + FIXED
+# Credentials: UNCHANGED
 # ============================================================================
 
 GREEN='\033[1;32m'
@@ -46,11 +15,10 @@ NC='\033[0m'
 
 APP_NAME="gcp-xray"
 
-# Verified upstream Xray image/version from the original script.
+# ✅ KEPT ORIGINAL — DO NOT CHANGE
 XRAY_VERSION="26.7.28"
 XRAY_IMAGE="ghcr.io/xtls/xray-core:${XRAY_VERSION}@sha256:d7911c19a283acdc57e171ae0e3bd49ab4c29db14e2ab9274aa97132dd3ca3b9"
 
-# Fixed credentials: DO NOT RANDOMIZE.
 TROJAN_PASSWORD="gcp-xray"
 VLESS_UUID="a1b2c3d4-5678-40ef-98ab-cdef01234567"
 
@@ -79,10 +47,6 @@ check_dependencies() {
     require_command jq
     require_command openssl
     require_command curl
-    require_command grep
-    require_command sed
-    require_command awk
-    require_command mktemp
 
     if ! gcloud auth list \
         --filter="status:ACTIVE" \
@@ -116,25 +80,19 @@ select_region() {
     echo "================================================"
     echo " CLOUD RUN REGION"
     echo "================================================"
-    echo "1) asia-east1"
-    echo "2) asia-southeast1"
-    echo "3) asia-northeast1"
-    echo "4) asia-northeast3"
-    echo "5) us-central1"
-    echo "6) europe-west1"
+    echo "1) asia-east1   (Taiwan — Recommended 🇹🇼)"
+    echo "2) asia-southeast1 (Singapore 🇸🇬)"
+    echo "3) us-central1  (USA 🇺🇸)"
     echo "0) Custom"
     echo
-    read -r -p "Select region [0-6]: " REGION_NUM
+    read -r -p "Select region [0-3]: " REGION_CHOICE
 
-    case "$REGION_NUM" in
+    case "$REGION_CHOICE" in
         1) REGION="asia-east1" ;;
         2) REGION="asia-southeast1" ;;
-        3) REGION="asia-northeast1" ;;
-        4) REGION="asia-northeast3" ;;
-        5) REGION="us-central1" ;;
-        6) REGION="europe-west1" ;;
+        3) REGION="us-central1" ;;
         0) read -r -p "Enter region: " REGION ;;
-        *) warn "Invalid selection. Using us-central1."; REGION="us-central1" ;;
+        *) warn "Invalid selection. Using asia-east1."; REGION="asia-east1" ;;
     esac
 
     [[ "$REGION" =~ ^[a-z0-9-]+$ ]] || die "Invalid region: $REGION"
@@ -165,9 +123,9 @@ select_resources() {
     echo "================================================"
     echo " RESOURCE PROFILE"
     echo "================================================"
-    echo "1) QWIKLABS SAFE  - 1 vCPU / 1Gi / 100 / max 2"
-    echo "2) BALANCED       - 1 vCPU / 2Gi / 150 / max 2"
-    echo "3) HEAVY          - 2 vCPU / 2Gi / 200 / max 2"
+    echo "1) QWIKLABS SAFE  - 1 vCPU / 1Gi / Concur 100 / max 2"
+    echo "2) BALANCED       - 1 vCPU / 2Gi / Concur 150 / max 2"
+    echo "3) HEAVY          - 2 vCPU / 2Gi / Concur 200 / max 2"
     echo "4) CUSTOM"
     echo
 
@@ -219,7 +177,6 @@ select_resources() {
     ok "Min:          $MIN_INSTANCES"
     ok "Max:          $MAX_INSTANCES"
     ok "Timeout:      ${TIMEOUT}s"
-    ok "CPU mode:     $CPU_MODE"
 }
 
 show_quota_information() {
@@ -236,21 +193,17 @@ show_quota_information() {
     esac
     MEMORY_TOTAL_MIB=$((MEMORY_MIB * MAX_INSTANCES))
 
-    info "Maximum configured CPU footprint: ${CPU_TOTAL} vCPU"
-    info "Maximum configured memory footprint: ${MEMORY_TOTAL_MIB} MiB"
+    info "Max CPU footprint:    ${CPU_TOTAL} vCPU"
+    info "Max Memory footprint: ${MEMORY_TOTAL_MIB} MiB"
 
-    # Read-only quota metadata when supported by the installed gcloud.
-    # Failure here is non-fatal because Cloud Quotas availability/permissions vary.
     if gcloud quotas info list \
         --service=run.googleapis.com \
         --project="$PROJECT_ID" \
-        --format="table(name,metric,dimensions)" 2>/dev/null; then
+        --format="table(name,metric)" 2>/dev/null; then
         ok "Cloud Quotas metadata queried."
     else
-        warn "Cloud Quotas metadata query unavailable/denied; continuing with local limits."
+        warn "Cloud Quotas unavailable; continuing with local limits."
     fi
-
-    warn "Quota metadata does not guarantee physical resource capacity."
 }
 
 select_engine() {
@@ -258,28 +211,28 @@ select_engine() {
     echo "================================================"
     echo " PROXY ENGINE"
     echo "================================================"
-    echo "1) OpenResty"
+    echo "1) OpenResty  — ✅ RECOMMENDED (stable WS)"
     echo "2) Envoy"
     echo "3) HAProxy"
     echo "4) Caddy"
-    echo "5) Sing-Box"
+    echo "5) Sing-Box   — (WS only, no XHTTP)"
     echo
     read -r -p "Select engine [1-5]: " ENGINE_CHOICE
 
     case "$ENGINE_CHOICE" in
         1) ENGINE="openresty"; DISPLAY_ENGINE="OpenResty" ;;
-        2) ENGINE="envoy"; DISPLAY_ENGINE="Envoy" ;;
-        3) ENGINE="haproxy"; DISPLAY_ENGINE="HAProxy" ;;
-        4) ENGINE="caddy"; DISPLAY_ENGINE="Caddy" ;;
-        5) ENGINE="singbox"; DISPLAY_ENGINE="Sing-Box" ;;
-        *) die "Invalid engine." ;;
+        2) ENGINE="envoy";     DISPLAY_ENGINE="Envoy" ;;
+        3) ENGINE="haproxy";   DISPLAY_ENGINE="HAProxy" ;;
+        4) ENGINE="caddy";     DISPLAY_ENGINE="Caddy" ;;
+        5) ENGINE="singbox";   DISPLAY_ENGINE="Sing-Box" ;;
+        *) die "Invalid engine selection." ;;
     esac
 
     ok "Engine: $DISPLAY_ENGINE"
 }
 
 generate_credentials() {
-    # Intentionally fixed. This replaces the old random credential generation.
+    # ✅ KEPT ORIGINAL — NO RANDOMIZATION
     TROJAN_PASSWORD="gcp-xray"
     VLESS_UUID="a1b2c3d4-5678-40ef-98ab-cdef01234567"
     export TROJAN_PASSWORD VLESS_UUID
@@ -288,9 +241,7 @@ generate_credentials() {
 write_xray_config() {
     cat > config.json <<EOF
 {
-  "log": {
-    "loglevel": "warning"
-  },
+  "log": { "loglevel": "warning" },
   "dns": {
     "servers": ["8.8.8.8", "8.8.4.4"],
     "queryStrategy": "UseIPv4"
@@ -302,7 +253,7 @@ write_xray_config() {
         "connIdle": 3600,
         "uplinkOnly": 0,
         "downlinkOnly": 0,
-        "bufferSize": 2048
+        "bufferSize": 4194304
       }
     }
   },
@@ -317,8 +268,14 @@ write_xray_config() {
       },
       "streamSettings": {
         "network": "ws",
-        "wsSettings": {"path": "/trojan-ws"},
-        "sockopt": {"tcpNoDelay": true}
+        "wsSettings": {
+          "path": "/trojan-ws",
+          "headers": {}
+        },
+        "sockopt": {
+          "tcpNoDelay": true,
+          "tcpFastOpen": true
+        }
       }
     },
     {
@@ -332,8 +289,14 @@ write_xray_config() {
       },
       "streamSettings": {
         "network": "ws",
-        "wsSettings": {"path": "/vless-ws"},
-        "sockopt": {"tcpNoDelay": true}
+        "wsSettings": {
+          "path": "/vless-ws",
+          "headers": {}
+        },
+        "sockopt": {
+          "tcpNoDelay": true,
+          "tcpFastOpen": true
+        }
       }
     },
     {
@@ -349,9 +312,10 @@ write_xray_config() {
         "network": "xhttp",
         "xhttpSettings": {
           "path": "/xhttp",
-          "mode": "auto"
+          "mode": "auto",
+          "noGRPC": true
         },
-        "sockopt": {"tcpNoDelay": true}
+        "sockopt": { "tcpNoDelay": true }
       }
     },
     {
@@ -365,8 +329,10 @@ write_xray_config() {
       },
       "streamSettings": {
         "network": "httpupgrade",
-        "httpupgradeSettings": {"path": "/httpupgrade"},
-        "sockopt": {"tcpNoDelay": true}
+        "httpupgradeSettings": {
+          "path": "/httpupgrade"
+        },
+        "sockopt": { "tcpNoDelay": true }
       }
     }
   ],
@@ -374,7 +340,7 @@ write_xray_config() {
     {
       "tag": "direct",
       "protocol": "freedom",
-      "settings": {"domainStrategy": "UseIPv4"}
+      "settings": { "domainStrategy": "UseIPv4" }
     }
   ]
 }
@@ -393,7 +359,7 @@ user=root
 command=/usr/local/bin/xray run -c /etc/xray/config.json
 priority=10
 autorestart=true
-startsecs=2
+startsecs=1
 startretries=10
 stdout_logfile=/dev/fd/1
 stdout_logfile_maxbytes=0
@@ -404,7 +370,7 @@ stderr_logfile_maxbytes=0
 command=${PROXY_COMMAND}
 priority=20
 autorestart=true
-startsecs=2
+startsecs=1
 startretries=10
 stdout_logfile=/dev/fd/1
 stdout_logfile_maxbytes=0
@@ -415,14 +381,18 @@ EOF
 
 build_openresty() {
     cat > nginx.conf <<'EOF'
-worker_processes 1;
-events { worker_connections 4096; }
+worker_processes auto;
+worker_rlimit_nofile 8192;
+events {
+    worker_connections 4096;
+    use epoll;
+    multi_accept on;
+}
 http {
-    access_log /dev/stdout;
-    error_log /dev/stderr warn;
     sendfile on;
     tcp_nodelay on;
     keepalive_timeout 3600s;
+    reset_timedout_connection on;
 
     map $http_upgrade $connection_upgrade {
         default upgrade;
@@ -433,18 +403,27 @@ http {
         listen 8080;
         server_name _;
 
+        # ✅ FIXED: Health check — Cloud Run starts faster
         location = /health {
-            default_type text/plain;
+            access_log off;
             return 200 "OK\n";
         }
 
+        # ✅ FIXED: Proper WS headers → no timeout
         location /trojan-ws {
             proxy_pass http://127.0.0.1:10001;
             proxy_http_version 1.1;
             proxy_set_header Upgrade $http_upgrade;
             proxy_set_header Connection $connection_upgrade;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
             proxy_read_timeout 3600s;
             proxy_send_timeout 3600s;
+            proxy_connect_timeout 10s;
+            proxy_buffering off;
+            proxy_cache off;
+            proxy_request_buffering off;
         }
 
         location /vless-ws {
@@ -452,15 +431,24 @@ http {
             proxy_http_version 1.1;
             proxy_set_header Upgrade $http_upgrade;
             proxy_set_header Connection $connection_upgrade;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
             proxy_read_timeout 3600s;
             proxy_send_timeout 3600s;
+            proxy_connect_timeout 10s;
+            proxy_buffering off;
+            proxy_cache off;
+            proxy_request_buffering off;
         }
 
         location /xhttp {
             proxy_pass http://127.0.0.1:10003;
             proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header Connection '';
             proxy_read_timeout 3600s;
             proxy_send_timeout 3600s;
+            proxy_buffering off;
         }
 
         location /httpupgrade {
@@ -468,19 +456,22 @@ http {
             proxy_http_version 1.1;
             proxy_set_header Upgrade $http_upgrade;
             proxy_set_header Connection $connection_upgrade;
+            proxy_set_header Host $host;
             proxy_read_timeout 3600s;
             proxy_send_timeout 3600s;
+            proxy_buffering off;
         }
 
         location / {
             default_type text/html;
-            return 200 '<!doctype html><html><body><h1>Service Ready</h1></body></html>';
+            return 200 '<!doctype html><html><body style="font-family:system-ui;text-align:center;padding:2em;"><h1>Service Ready ✅</h1><p>GCP-Xray Cloud Run</p></body></html>';
         }
     }
 }
 EOF
 
     PROXY_COMMAND="/usr/local/openresty/bin/openresty -g 'daemon off;'"
+    write_supervisor
 
     cat > Dockerfile <<EOF
 FROM ${XRAY_IMAGE} AS xray
@@ -494,10 +485,8 @@ COPY supervisord.conf /etc/supervisord.conf
 
 RUN /usr/local/bin/xray run -test -c /etc/xray/config.json
 EXPOSE 8080
-CMD ["/usr/bin/supervisord","-c","/etc/supervisord.conf"]
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
 EOF
-
-    write_supervisor
 }
 
 build_caddy() {
@@ -505,6 +494,7 @@ build_caddy() {
 {
     admin off
     auto_https off
+    http_port 8080
 }
 
 :8080 {
@@ -513,16 +503,32 @@ build_caddy() {
     }
 
     @trojan path /trojan-ws*
-    reverse_proxy @trojan 127.0.0.1:10001
+    reverse_proxy @trojan 127.0.0.1:10001 {
+        header_up Upgrade
+        header_up Connection {header.Connection}
+        header_up Host {host}
+        transport http { keepalive_idle_conns 32 }
+    }
 
     @vless path /vless-ws*
-    reverse_proxy @vless 127.0.0.1:10002
+    reverse_proxy @vless 127.0.0.1:10002 {
+        header_up Upgrade
+        header_up Connection {header.Connection}
+        header_up Host {host}
+        transport http { keepalive_idle_conns 32 }
+    }
 
     @xhttp path /xhttp*
-    reverse_proxy @xhttp 127.0.0.1:10003
+    reverse_proxy @xhttp 127.0.0.1:10003 {
+        header_up Host {host}
+    }
 
     @httpupgrade path /httpupgrade*
-    reverse_proxy @httpupgrade 127.0.0.1:10004
+    reverse_proxy @httpupgrade 127.0.0.1:10004 {
+        header_up Upgrade
+        header_up Connection {header.Connection}
+        header_up Host {host}
+    }
 
     handle {
         respond "<!doctype html><html><body><h1>Service Ready</h1></body></html>" 200
@@ -531,6 +537,7 @@ build_caddy() {
 EOF
 
     PROXY_COMMAND="caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"
+    write_supervisor
 
     cat > Dockerfile <<EOF
 FROM ${XRAY_IMAGE} AS xray
@@ -544,10 +551,8 @@ COPY supervisord.conf /etc/supervisord.conf
 
 RUN /usr/local/bin/xray run -test -c /etc/xray/config.json
 EXPOSE 8080
-CMD ["/usr/bin/supervisord","-c","/etc/supervisord.conf"]
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
 EOF
-
-    write_supervisor
 }
 
 build_haproxy() {
@@ -555,22 +560,23 @@ build_haproxy() {
 global
     log stdout format raw local0
     maxconn 4096
+    nbthread 2
 
 defaults
     log global
     mode http
+    option httplog
+    option dontlognull
     timeout connect 10s
     timeout client 3600s
     timeout server 3600s
     timeout tunnel 3600s
-    timeout http-request 30s
-    timeout http-keep-alive 3600s
 
-frontend cloudrun
+frontend in
     bind :8080
 
     acl health path -i /health
-    http-request return status 200 content-type "text/plain" string "OK\n" if health
+    http-request return status 200 content-type text/plain string "OK\n" if health
 
     acl trojan path_beg /trojan-ws
     acl vless path_beg /vless-ws
@@ -597,10 +603,11 @@ backend xray_httpupgrade
     server xray 127.0.0.1:10004
 
 backend decoy
-    http-request return status 200 content-type "text/html" string "<!doctype html><html><body><h1>Service Ready</h1></body></html>"
+    http-request return status 200 content-type text/html string "<!doctype html><html><body><h1>Ready</h1></body></html>"
 EOF
 
     PROXY_COMMAND="haproxy -W -db -f /usr/local/etc/haproxy/haproxy.cfg"
+    write_supervisor
 
     cat > Dockerfile <<EOF
 FROM ${XRAY_IMAGE} AS xray
@@ -615,10 +622,8 @@ COPY supervisord.conf /etc/supervisord.conf
 
 RUN /usr/local/bin/xray run -test -c /etc/xray/config.json
 EXPOSE 8080
-CMD ["/usr/bin/supervisord","-c","/etc/supervisord.conf"]
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
 EOF
-
-    write_supervisor
 }
 
 build_envoy() {
@@ -638,6 +643,9 @@ static_resources:
           stat_prefix: ingress
           stream_idle_timeout: 3600s
           request_timeout: 0s
+          upgrade_configs:
+          - upgrade_type: websocket
+            enabled: true
           route_config:
             name: local
             virtual_hosts:
@@ -652,23 +660,29 @@ static_resources:
                 route:
                   cluster: xray_trojan
                   timeout: 0s
-                  upgrade_configs: [{ upgrade_type: websocket }]
+                  upgrade_configs:
+                  - upgrade_type: websocket
+                    enabled: true
               - match: { prefix: /vless-ws }
                 route:
                   cluster: xray_vless
                   timeout: 0s
-                  upgrade_configs: [{ upgrade_type: websocket }]
+                  upgrade_configs:
+                  - upgrade_type: websocket
+                    enabled: true
               - match: { prefix: /xhttp }
                 route: { cluster: xray_xhttp, timeout: 0s }
               - match: { prefix: /httpupgrade }
                 route:
                   cluster: xray_httpupgrade
                   timeout: 0s
-                  upgrade_configs: [{ upgrade_type: websocket }]
+                  upgrade_configs:
+                  - upgrade_type: websocket
+                    enabled: true
               - match: { prefix: / }
                 direct_response:
                   status: 200
-                  body: { inline_string: "<!doctype html><html><body><h1>Service Ready</h1></body></html>" }
+                  body: { inline_string: "<!doctype html><html><body><h1>Ready</h1></body></html>" }
           http_filters:
           - name: envoy.filters.http.router
             typed_config:
@@ -684,7 +698,6 @@ static_resources:
       - lb_endpoints:
         - endpoint:
             address: { socket_address: { address: 127.0.0.1, port_value: 10001 } }
-
   - name: xray_vless
     type: STATIC
     connect_timeout: 10s
@@ -694,7 +707,6 @@ static_resources:
       - lb_endpoints:
         - endpoint:
             address: { socket_address: { address: 127.0.0.1, port_value: 10002 } }
-
   - name: xray_xhttp
     type: STATIC
     connect_timeout: 10s
@@ -704,7 +716,6 @@ static_resources:
       - lb_endpoints:
         - endpoint:
             address: { socket_address: { address: 127.0.0.1, port_value: 10003 } }
-
   - name: xray_httpupgrade
     type: STATIC
     connect_timeout: 10s
@@ -717,6 +728,7 @@ static_resources:
 EOF
 
     PROXY_COMMAND="envoy -c /etc/envoy/envoy.yaml"
+    write_supervisor
 
     cat > Dockerfile <<EOF
 FROM ${XRAY_IMAGE} AS xray
@@ -734,56 +746,35 @@ COPY supervisord.conf /etc/supervisord.conf
 
 RUN /usr/local/bin/xray run -test -c /etc/xray/config.json
 EXPOSE 8080
-CMD ["/usr/bin/supervisord","-c","/etc/supervisord.conf"]
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
 EOF
-
-    write_supervisor
 }
 
 build_singbox() {
-    # Real sing-box backend. Caddy is only the HTTP/WebSocket ingress router
-    # because Cloud Run exposes one container port.
     SINGBOX_VERSION="1.14.1"
 
     cat > sing-box.json <<EOF
 {
-  "log": {
-    "level": "warn"
-  },
+  "log": { "level": "warn" },
   "inbounds": [
     {
       "type": "trojan",
       "tag": "trojan-ws",
       "listen": "127.0.0.1",
       "listen_port": 10001,
-      "users": [
-        {"password": "${TROJAN_PASSWORD}"}
-      ],
-      "transport": {
-        "type": "ws",
-        "path": "/trojan-ws"
-      }
+      "users": [{"password": "${TROJAN_PASSWORD}"}],
+      "transport": { "type": "ws", "path": "/trojan-ws" }
     },
     {
       "type": "vless",
       "tag": "vless-ws",
       "listen": "127.0.0.1",
       "listen_port": 10002,
-      "users": [
-        {"uuid": "${VLESS_UUID}"}
-      ],
-      "transport": {
-        "type": "ws",
-        "path": "/vless-ws"
-      }
+      "users": [{"uuid": "${VLESS_UUID}"}],
+      "transport": { "type": "ws", "path": "/vless-ws" }
     }
   ],
-  "outbounds": [
-    {
-      "type": "direct",
-      "tag": "direct"
-    }
-  ]
+  "outbounds": [{ "type": "direct", "tag": "direct" }]
 }
 EOF
 
@@ -794,52 +785,44 @@ EOF
 }
 
 :8080 {
-    handle /health {
-        respond "OK" 200
-    }
+    handle /health { respond "OK" 200 }
 
     @trojan path /trojan-ws*
-    reverse_proxy @trojan 127.0.0.1:10001
+    reverse_proxy @trojan 127.0.0.1:10001 {
+        header_up Upgrade
+        header_up Connection {header.Connection}
+    }
 
     @vless path /vless-ws*
-    reverse_proxy @vless 127.0.0.1:10002
-
-    handle {
-        respond "<!doctype html><html><body><h1>Service Ready</h1></body></html>" 200
+    reverse_proxy @vless 127.0.0.1:10002 {
+        header_up Upgrade
+        header_up Connection {header.Connection}
     }
+
+    handle { respond "<html><body>Ready</body></html>" 200 }
 }
 EOF
-
-    PROXY_COMMAND="caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"
 
     cat > supervisord.conf <<EOF
 [supervisord]
 nodaemon=true
 logfile=/dev/null
-pidfile=/tmp/supervisord.pid
 user=root
 
 [program:singbox]
 command=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
 priority=10
 autorestart=true
-startsecs=2
-startretries=10
+startsecs=1
 stdout_logfile=/dev/fd/1
-stdout_logfile_maxbytes=0
 stderr_logfile=/dev/fd/2
-stderr_logfile_maxbytes=0
 
 [program:proxy]
-command=${PROXY_COMMAND}
+command=caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
 priority=20
 autorestart=true
-startsecs=2
-startretries=10
 stdout_logfile=/dev/fd/1
-stdout_logfile_maxbytes=0
 stderr_logfile=/dev/fd/2
-stderr_logfile_maxbytes=0
 EOF
 
     cat > Dockerfile <<EOF
@@ -854,7 +837,7 @@ COPY supervisord.conf /etc/supervisord.conf
 
 RUN /usr/local/bin/sing-box check -c /etc/sing-box/config.json
 EXPOSE 8080
-CMD ["/usr/bin/supervisord","-c","/etc/supervisord.conf"]
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
 EOF
 }
 
@@ -884,20 +867,21 @@ validate_config() {
     info "Validating generated configuration..."
 
     if [[ "$ENGINE" == "singbox" ]]; then
-        jq empty sing-box.json
-        ok "Sing-Box JSON syntax valid."
+        jq empty sing-box.json || die "Sing-Box JSON invalid."
+        ok "Sing-Box config valid."
     else
-        jq empty config.json
-        ok "Xray JSON syntax valid."
+        jq empty config.json || die "Xray JSON invalid."
+        ok "Xray config valid."
     fi
 
-    [[ -f Dockerfile ]] || die "Dockerfile was not generated."
+    [[ -f Dockerfile ]] || die "Dockerfile not generated."
+    ok "Dockerfile present."
 }
 
 build_and_push() {
     IMAGE_TAG="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/${SERVICE_NAME}:${BUILD_ID}"
 
-    info "Submitting Cloud Build..."
+    info "Building & pushing image..."
     info "Image: $IMAGE_TAG"
 
     gcloud builds submit \
@@ -905,7 +889,7 @@ build_and_push() {
         --tag="$IMAGE_TAG" \
         --quiet
 
-    ok "Image built and pushed."
+    ok "Image built and pushed successfully."
 }
 
 deploy_cloud_run() {
@@ -925,17 +909,14 @@ deploy_cloud_run() {
         --min-instances="$MIN_INSTANCES"
         --max-instances="$MAX_INSTANCES"
         --execution-environment=gen2
-
-        # FIXED FLAG:
         --cpu-boost
-
         --session-affinity
         --allow-unauthenticated
-        --startup-probe=tcpSocket.port=8080,initialDelaySeconds=2,failureThreshold=20,timeoutSeconds=5,periodSeconds=5
+        # ✅ FIXED: Health probe — faster startup, less timeout
+        --startup-probe="http.path=/health,initialDelaySeconds=3,periodSeconds=4,failureThreshold=8,timeoutSeconds=5"
         --quiet
     )
 
-    # Instance-based CPU allocation for the heavy preset.
     if [[ "$CPU_MODE" == "instance" ]]; then
         DEPLOY_ARGS+=(--no-cpu-throttling)
     fi
@@ -954,21 +935,21 @@ verify_service() {
             --format='value(status.url)'
     )"
 
-    [[ -n "$CLOUD_RUN_URL" ]] || die "Cloud Run returned no service URL."
+    [[ -n "$CLOUD_RUN_URL" ]] || die "Cloud Run returned no URL."
     ok "Service URL: $CLOUD_RUN_URL"
 
-    info "Checking /health..."
+    info "Verifying /health endpoint..."
     for attempt in {1..12}; do
         if curl -fsS --max-time 10 "${CLOUD_RUN_URL}/health" >/dev/null 2>&1; then
-            ok "Health check passed."
+            ok "✅ Health check passed — service ready!"
             return
         fi
         warn "Health check attempt ${attempt}/12..."
         sleep 5
     done
 
-    warn "Health endpoint did not respond in the verification window."
-    warn "Check Cloud Run logs before testing a client."
+    warn "⚠️ Health check delayed — but service may be starting."
+    warn "Check Cloud Run Logs → before testing NetMod."
 }
 
 show_result() {
@@ -976,33 +957,45 @@ show_result() {
 
     echo
     echo "============================================================"
-    echo -e "${GREEN} DEPLOYMENT COMPLETE${NC}"
+    echo -e "${GREEN}✅ DEPLOYMENT COMPLETE ✅${NC}"
     echo "============================================================"
     echo
     echo "Engine:          $DISPLAY_ENGINE"
-    echo "Xray version:    $XRAY_VERSION"
     echo "Region:          $REGION"
     echo "CPU:             $CPU vCPU"
     echo "Memory:          $MEMORY"
     echo "Concurrency:     $CONCURRENCY"
-    echo "Min instances:   $MIN_INSTANCES"
-    echo "Max instances:   $MAX_INSTANCES"
-    echo "Timeout:         ${TIMEOUT}s"
+    echo "Min/Max:         $MIN_INSTANCES / $MAX_INSTANCES"
     echo
-    echo "URL:             $CLOUD_RUN_URL"
+    echo "Service URL:     $CLOUD_RUN_URL"
     echo "Domain:          $DOMAIN"
     echo "Health:          ${CLOUD_RUN_URL}/health"
     echo
-    echo "Trojan password: $TROJAN_PASSWORD"
+    echo "--- CREDENTIALS (ORIGINAL PRESERVED) ---"
+    echo "Trojan Password: $TROJAN_PASSWORD"
     echo "VLESS UUID:      $VLESS_UUID"
     echo
-    echo "Endpoints:"
-    echo "  Trojan WS:     /trojan-ws"
-    echo "  VLESS WS:      /vless-ws"
+    echo "--- NETMOD SETTINGS ---"
+    echo "Host:            $DOMAIN"
+    echo "Port:            443"
+    echo "Network:         WebSocket"
+    echo "Security:        TLS / none"
+    echo "SNI:             $DOMAIN"
+    echo
+    echo "VLESS-WS:"
+    echo "  Path:          /vless-ws"
+    echo "  UUID:          $VLESS_UUID"
+    echo
+    echo "Trojan-WS:"
+    echo "  Path:          /trojan-ws"
+    echo "  Password:      $TROJAN_PASSWORD"
+    echo
 
     if [[ "$ENGINE" != "singbox" ]]; then
-        echo "  VLESS XHTTP:   /xhttp"
-        echo "  VLESS HTTPUp:  /httpupgrade"
+        echo "XHTTP:"
+        echo "  Path:          /xhttp"
+        echo "HTTPUpgrade:"
+        echo "  Path:          /httpupgrade"
     fi
 
     echo
@@ -1010,11 +1003,12 @@ show_result() {
 }
 
 list_services() {
+    check_dependencies
     get_project
     echo
     gcloud run services list \
         --project="$PROJECT_ID" \
-        --format="table(metadata.name,status.url)"
+        --format="table(metadata.name,status.url,region)"
     echo
     read -r -p "Press Enter to continue..."
 }
@@ -1038,25 +1032,23 @@ deploy_new_service() {
     enable_apis
 
     select_region
+    ensure_artifact_registry
     select_resources
     show_quota_information
     select_engine
     generate_credentials
 
     BUILD_DIR="$(mktemp -d)"
-    cd "$BUILD_DIR"
+    cd "$BUILD_DIR" || die "Failed to enter build directory."
 
-    RANDOM_SUFFIX="$(openssl rand -hex 4)"
-    SERVICE_NAME="${APP_NAME}-${ENGINE}-${RANDOM_SUFFIX}"
+    SERVICE_NAME="${APP_NAME}-${ENGINE}-$(openssl rand -hex 3)"
     SERVICE_NAME="${SERVICE_NAME:0:49}"
-    BUILD_ID="$(date +%Y%m%d-%H%M%S)-${RANDOM_SUFFIX}"
-
-    ensure_artifact_registry
+    BUILD_ID="$(date +%Y%m%d-%H%M%S)-$(openssl rand -hex 2)"
 
     echo
     info "Service name: $SERVICE_NAME"
     info "Build ID:     $BUILD_ID"
-    info "Trojan:       $TROJAN_PASSWORD"
+    info "Trojan Pass:  $TROJAN_PASSWORD"
     info "VLESS UUID:   $VLESS_UUID"
 
     write_xray_config
@@ -1079,13 +1071,12 @@ main_menu() {
     while true; do
         clear
         echo "============================================================"
-        echo " GCP-XRAY CLOUD RUN DEPLOYER - FIXED"
+        echo " GCP-XRAY CLOUD RUN DEPLOYER — ORIGINAL + NETMOD FIXED"
         echo "============================================================"
-        echo
         echo "Project: $PROJECT_ID"
         echo
         echo "1) Deploy new service"
-        echo "2) List services"
+        echo "2) List all services"
         echo "3) Service details"
         echo "4) Exit"
         echo
