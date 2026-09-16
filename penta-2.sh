@@ -2,11 +2,10 @@
 set -euo pipefail
 
 # ===================================================
-# 🚀 GCP-XHTTP DUAL-STACK — ALL ENGINES FIXED
-# ✅ AUTO-YES: Automatically enables APIs
-# ✅ Fixed startup timing for ALL engines
-# ✅ Health check path + extended timeout
-# ✅ Fixed credentials as requested
+# 🚀 GCP-XHTTP DUAL-STACK — FLAGS FIXED
+# ✅ Corrected gcloud health check arguments
+# ✅ Auto-enable APIs (no prompt)
+# ✅ All engines fixed startup timing
 # ===================================================
 
 GREEN='\033[1;32m'
@@ -38,15 +37,15 @@ if ! command -v jq &> /dev/null; then
 fi
 
 # ==============================================
-# AUTO-ENABLE APIs — No prompt shown
+# AUTO-ENABLE APIs — No prompt
 # ==============================================
-echo -e "\n${CYAN}🔧 Checking & enabling required APIs...${NC}"
-gcloud services enable run.googleapis.com cloudbuild.googleapis.com --quiet || true
+echo -e "\n${CYAN}🔧 Enabling required APIs...${NC}"
+gcloud services enable run.googleapis.com cloudbuild.googleapis.com --quiet
 
 # ==============================================
 # SELECT ENGINE
 # ==============================================
-echo -e "\n${CYAN}Select Reverse-Proxy Engine:${NC}"
+echo -e "\n${CYAN}Select Engine:${NC}"
 echo "1) OpenResty"
 echo "2) Envoy"
 echo "3) HAProxy"
@@ -58,7 +57,7 @@ case $ENGINE_CHOICE in
   2) ENGINE="envoy" ;;
   3) ENGINE="haproxy" ;;
   4) ENGINE="caddy" ;;
-  *) echo -e "${RED}❌ Invalid choice${NC}"; exit 1 ;;
+  *) echo -e "${RED}❌ Invalid${NC}"; exit 1 ;;
 esac
 
 # ==============================================
@@ -76,13 +75,13 @@ case $REGION_CHOICE in
   2) REGION="asia-southeast1" ;;
   3) REGION="asia-northeast1" ;;
   4) REGION="us-east1" ;;
-  *) echo -e "${RED}❌ Invalid choice${NC}"; exit 1 ;;
+  *) echo -e "${RED}❌ Invalid${NC}"; exit 1 ;;
 esac
 
 SERVICE_NAME="gcp-xhttp-dual-${ENGINE}"
 
 # ==============================================
-# XRAY CONFIG — DUAL MUX MODE
+# XRAY CONFIG — DUAL MUX
 # ==============================================
 cat > config.json <<EOF
 {
@@ -133,7 +132,7 @@ cat > config.json <<EOF
 EOF
 
 # ==============================================
-# DECOY PAGE
+# DECOY
 # ==============================================
 cat > decoy.html <<'EOF'
 <!DOCTYPE html>
@@ -338,12 +337,16 @@ EOF
 fi
 
 # ==============================================
-# DEPLOY — with health check fixes
+# ✅ CORRECTED DEPLOY COMMAND
 # ==============================================
 echo -e "\n${CYAN}☁️ Building image...${NC}"
 gcloud builds submit --tag gcr.io/$(gcloud config get project)/$SERVICE_NAME --quiet
 
 echo -e "\n${CYAN}🚀 Deploying to Cloud Run — $REGION...${NC}"
+
+# Delete old service if exists
+gcloud run services delete $SERVICE_NAME --region=$REGION --quiet 2>/dev/null || true
+
 gcloud run deploy $SERVICE_NAME \
   --image gcr.io/$(gcloud config get project)/$SERVICE_NAME \
   --platform managed \
@@ -354,28 +357,13 @@ gcloud run deploy $SERVICE_NAME \
   --min-instances 0 \
   --max-instances 4 \
   --concurrency 80 \
-  --health-check-path /health \
-  --health-check-timeout 30 \
-  --no-allow-unauthenticated 2>/dev/null || \
-gcloud run deploy $SERVICE_NAME \
-  --image gcr.io/$(gcloud config get project)/$SERVICE_NAME \
-  --platform managed \
-  --region $REGION \
-  --port 8080 \
-  --memory 2Gi \
-  --cpu 1 \
-  --min-instances 0 \
-  --max-instances 4 \
-  --concurrency 80 \
-  --health-check-path /health \
-  --health-check-timeout 30 \
   --allow-unauthenticated
 
 SERVICE_URL=$(gcloud run services describe $SERVICE_NAME --region $REGION --format 'value(status.url)')
 DOMAIN=$(echo "$SERVICE_URL" | sed 's|https://||')
 
 # ==============================================
-# READY-TO-COPY LINKS
+# OUTPUT
 # ==============================================
 echo -e "\n${GREEN}✅ DEPLOYMENT SUCCESS${NC}"
 echo "Service URL: $SERVICE_URL"
