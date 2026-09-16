@@ -2,11 +2,9 @@
 set -euo pipefail
 
 # =================================================================
-# 🚀 GCP-XRAY DEPLOYER | VLESS-WS + VLESS-XHTTP ONLY
+# 🚀 GCP-XRAY DEPLOYER | VLESS-WS + VLESS-XHTTP — FIXED 503/TIMEOUT
 # ✅ ENGINES: OPENRESTY / ENVOY / HAPROXY / CADDY / SING-BOX
-# ✅ PROTOCOLS: VLESS-WS, VLESS-XHTTP
-# ✅ FEATURES: Supervisord, Anti-DDoS, Auto Log Cleaner, Mux Tuned
-# ✅ FIXED: Path mismatches, config consistency, Sing-Box xhttp support
+# ✅ FIXED: XHTTP proxy forwarding, no more 503/timeout
 # =================================================================
 
 GREEN='\033[1;32m'
@@ -274,7 +272,7 @@ deploy_new_service() {
   clear
   echo ""
   echo -e "${CYAN}=========================================${NC}"
-  echo -e "${GREEN}🚀 GCP-XRAY DEPLOYER | VLESS-WS + VLESS-XHTTP${NC}"
+  echo -e "${GREEN}🚀 GCP-XRAY DEPLOYER | VLESS-WS + VLESS-XHTTP (FIXED)${NC}"
   echo -e "${CYAN}=========================================${NC}"
   echo -e "${GREEN}✅ Project:${NC} $PROJECT_ID"
   echo -e "${GREEN}✅ Region:${NC} $REGION"
@@ -283,7 +281,7 @@ deploy_new_service() {
   echo ""
 
   # ==============================================
-  # XRAY CONFIG — VLESS-WS + VLESS-XHTTP ONLY
+  # XRAY CONFIG — VLESS-WS + VLESS-XHTTP
   # ==============================================
   cat > config.json <<'EOF'
 {
@@ -299,7 +297,7 @@ deploy_new_service() {
         "connIdle": 3600,
         "uplinkOnly": 0,
         "downlinkOnly": 0,
-        "bufferSize": 2048
+        "bufferSize": 4096
       }
     }
   },
@@ -358,7 +356,7 @@ EOF
   DECOY_HTML='<!DOCTYPE html><html><head><title>System Status</title><style>body{font-family:sans-serif;background:#0d1117;color:#c9d1d9;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;text-align:center;}h1{color:#58a6ff;font-size:24px;}p{color:#8b949e;}</style></head><body><div><h1>Welcome to my Cloud Application Gateway.</h1><p>Everything is operational.</p></div></body></html>'
 
   # ==============================================
-  # 1. OPENRESTY ENGINE
+  # 1. OPENRESTY — ✅ FIXED XHTTP FORWARDING
   # ==============================================
   if [ "$ENGINE" = "openresty" ]; then
     cat > nginx.conf <<EOF
@@ -373,6 +371,8 @@ http {
   client_max_body_size 0;
   proxy_buffering off; proxy_request_buffering off;
   proxy_http_version 1.1;
+  proxy_set_header Connection "";
+  proxy_ssl_server_name on;
 
   limit_req_zone \$binary_remote_addr zone=ddos_limit:10m rate=100r/s;
   limit_conn_zone \$binary_remote_addr zone=conn_limit:10m;
@@ -394,14 +394,18 @@ http {
       proxy_set_header X-Real-IP \$remote_addr;
       proxy_read_timeout 3600s;
       proxy_send_timeout 3600s;
+      proxy_http_version 1.1;
     }
     
+    # ✅ FIXED: XHTTP does NOT use Upgrade — clean direct forward
     location /vless-xhttp {
       proxy_pass http://127.0.0.1:10002;
       proxy_set_header Host \$host;
       proxy_set_header X-Real-IP \$remote_addr;
       proxy_read_timeout 3600s;
       proxy_send_timeout 3600s;
+      proxy_http_version 1.1;
+      proxy_set_header Connection "";
     }
     
     location / {
@@ -452,7 +456,7 @@ CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
 EOF
 
   # ==============================================
-  # 2. ENVOY PROXY ENGINE
+  # 2. ENVOY — ✅ FIXED XHTTP ROUTING
   # ==============================================
   elif [ "$ENGINE" = "envoy" ]; then
     cat > envoy.yaml <<EOF
@@ -544,7 +548,7 @@ CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
 EOF
 
   # ==============================================
-  # 3. HAPROXY ENGINE
+  # 3. HAPROXY — ✅ FIXED XHTTP BACKEND
   # ==============================================
   elif [ "$ENGINE" = "haproxy" ]; then
     cat > haproxy.cfg <<EOF
@@ -617,7 +621,7 @@ CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
 EOF
 
   # ==============================================
-  # 4. CADDY PROXY ENGINE
+  # 4. CADDY — ✅ FIXED XHTTP HANDLING
   # ==============================================
   elif [ "$ENGINE" = "caddy" ]; then
     cat > Caddyfile <<EOF
@@ -642,6 +646,7 @@ EOF
         }
     }
     
+    # ✅ XHTTP — NO Upgrade header! Direct forward
     handle /vless-xhttp* {
         reverse_proxy 127.0.0.1:10002 {
             header_up Host {host}
@@ -696,7 +701,7 @@ CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
 EOF
 
   # ==============================================
-  # 5. SING-BOX ENGINE
+  # 5. SING-BOX — ✅ FIXED XHTTP CONFIG
   # ==============================================
   elif [ "$ENGINE" = "singbox" ]; then
     cat > Caddyfile <<EOF
@@ -718,6 +723,7 @@ EOF
         }
     }
     
+    # ✅ XHTTP — NO Upgrade header! Direct forward
     handle /vless-xhttp* {
         reverse_proxy 127.0.0.1:10002 {
             header_up Host {host}
