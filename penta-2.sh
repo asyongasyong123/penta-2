@@ -3,7 +3,8 @@ set -Eeuo pipefail
 set -o errtrace
 
 # ============================================================================
-# GCP-XRAY — FIXED STARTUP PROBE FOR QWIKLABS
+# GCP-XRAY — NO INSTANCE CRASH FIX | QWIKLABS OPTIMIZED
+# Credentials KEPT: gcp-xray / a1b2c3d4-5678-40ef-98ab-cdef01234567
 # ============================================================================
 
 GREEN='\033[1;32m'
@@ -49,7 +50,7 @@ select_region() {
   echo
   echo "1) asia-east1   (Taiwan — Fastest 🇹🇼)"
   echo "2) asia-southeast1 (Singapore 🇸🇬)"
-  echo "3) us-central1  (USA — Default Qwiklabs 🇺🇸)"
+  echo "3) us-central1  (USA — Qwiklabs Default 🇺🇸)"
   echo "0) Custom"
   read -rp "Select region [0-3]: " REGION_CHOICE
   case "$REGION_CHOICE" in
@@ -70,27 +71,30 @@ ensure_artifact_registry() {
 }
 select_resources() {
   echo
-  echo "1) QWIKLABS SAFE — 1vCPU/1Gi/Concur 100/Max 2 ✅"
-  echo "2) BALANCED      — 1vCPU/2Gi/Concur 150/Max 2"
-  echo "3) HEAVY         — 2vCPU/2Gi/Concur 200/Max 2"
+  echo "================================================"
+  echo " RESOURCE PROFILE — AVOID OUT-OF-MEMORY"
+  echo "================================================"
+  echo "1) QWIKLABS OPTIMIZED ✅ — 1vCPU/2Gi/Concur 80/Min 1"
+  echo "2) BALANCED              — 1vCPU/2Gi/Concur 150/Min 0"
+  echo "3) HEAVY                 — 2vCPU/4Gi/Concur 300/Min 1"
   echo "4) CUSTOM"
   read -rp "Select profile [1-4]: " RESOURCE_CHOICE
   case "$RESOURCE_CHOICE" in
-    1) CPU=1; MEMORY=1Gi; CONCURRENCY=100; MIN_INSTANCES=0; MAX_INSTANCES=2; CPU_MODE="request" ;;
+    1) CPU=1; MEMORY=2Gi; CONCURRENCY=80; MIN_INSTANCES=1; MAX_INSTANCES=2; CPU_MODE="request" ;;
     2) CPU=1; MEMORY=2Gi; CONCURRENCY=150; MIN_INSTANCES=0; MAX_INSTANCES=2; CPU_MODE="request" ;;
-    3) CPU=2; MEMORY=2Gi; CONCURRENCY=200; MIN_INSTANCES=0; MAX_INSTANCES=2; CPU_MODE="instance" ;;
+    3) CPU=2; MEMORY=4Gi; CONCURRENCY=300; MIN_INSTANCES=1; MAX_INSTANCES=2; CPU_MODE="instance" ;;
     4) read -rp "CPU [1/2]: " CPU; read -rp "Memory: " MEMORY; read -rp "Concur: " CONCURRENCY; read -rp "Min: " MIN_INSTANCES; read -rp "Max: " MAX_INSTANCES; CPU_MODE="request" ;;
-    *) warn "Using QWIKLABS SAFE"; CPU=1; MEMORY=1Gi; CONCURRENCY=100; MIN_INSTANCES=0; MAX_INSTANCES=2; CPU_MODE="request" ;;
+    *) warn "Using QWIKLABS OPTIMIZED"; CPU=1; MEMORY=2Gi; CONCURRENCY=80; MIN_INSTANCES=1; MAX_INSTANCES=2; CPU_MODE="request" ;;
   esac
   TIMEOUT=$MAX_TIMEOUT
-  ok "Resources: $CPU vCPU / $MEMORY / Concurrency: $CONCURRENCY"
+  ok "Resources: $CPU vCPU / $MEMORY / Concurrency: $CONCURRENCY / Min: $MIN_INSTANCES"
 }
 select_engine() {
   echo
-  echo "1) OpenResty  — ✅ RECOMMENDED"
-  echo "2) Envoy"
-  echo "3) HAProxy"
-  echo "4) Caddy"
+  echo "1) OpenResty  — ✅ RECOMMENDED (Light & Stable)"
+  echo "2) Envoy      — (Heavier, needs 2Gi+)"
+  echo "3) HAProxy    — (Light, fast)"
+  echo "4) Caddy      — (Simple)"
   echo "5) Sing-Box   — (WS only)"
   read -rp "Engine [1-5]: " EC
   case $EC in
@@ -112,9 +116,9 @@ generate_credentials() {
 write_xray_config() {
   cat > config.json <<EOF
 {
-  "log": { "loglevel": "warning" },
-  "dns": { "servers": ["8.8.8.8", "8.8.4.4"], "queryStrategy": "UseIPv4" },
-  "policy": { "levels": { "0": { "handshake": 10, "connIdle": 3600, "bufferSize": 4194304 } } },
+  "log": { "loglevel": "error" },
+  "dns": { "servers": ["8.8.8.8"], "queryStrategy": "UseIPv4" },
+  "policy": { "levels": { "0": { "handshake": 15, "connIdle": 3600, "bufferSize": 2097152 } } },
   "inbounds": [
     {
       "tag": "trojan-ws", "listen": "127.0.0.1", "port": 10001, "protocol": "trojan",
@@ -129,7 +133,7 @@ write_xray_config() {
     {
       "tag": "vless-xhttp", "listen": "127.0.0.1", "port": 10003, "protocol": "vless",
       "settings": { "clients": [{"id": "$VLESS_UUID"}], "decryption": "none" },
-      "streamSettings": { "network": "xhttp", "xhttpSettings": { "path": "/xhttp", "mode": "auto" }, "sockopt": { "tcpNoDelay": true } }
+      "streamSettings": { "network": "xhttp", "xhttpSettings": { "path": "/xhttp", "mode": "auto", "noGRPC": true }, "sockopt": { "tcpNoDelay": true } }
     },
     {
       "tag": "vless-httpupgrade", "listen": "127.0.0.1", "port": 10004, "protocol": "vless",
@@ -148,31 +152,54 @@ write_supervisor() {
 nodaemon=true
 logfile=/dev/null
 user=root
+logfile_maxbytes=0
+
 [program:xray]
 command=/usr/local/bin/xray run -c /etc/xray/config.json
 autorestart=true
-startsecs=1
-stdout_logfile=/dev/fd/1
-stderr_logfile=/dev/fd/2
+startsecs=3
+startretries=20
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+
 [program:proxy]
 command=${PROXY_COMMAND}
 autorestart=true
-startsecs=1
-stdout_logfile=/dev/fd/1
-stderr_logfile=/dev/fd/2
+startsecs=3
+startretries=20
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
 EOF
 }
 
 build_openresty() {
   cat > nginx.conf <<'EOF'
-worker_processes auto;
-events { worker_connections 4096; }
+worker_processes 1;
+worker_rlimit_nofile 1024;
+events { worker_connections 512; use epoll; }
 http {
-  sendfile on; tcp_nodelay on; keepalive_timeout 3600s;
-  map $http_upgrade $conn_upg { default upgrade; '' close; }
+  sendfile on;
+  tcp_nodelay on;
+  keepalive_timeout 3600s;
+  reset_timedout_connection on;
+
+  map $http_upgrade $conn_upg {
+    default upgrade;
+    '' '';
+  }
+
   server {
     listen 8080;
-    location = /health { access_log off; return 200 "OK\n"; }
+
+    location = /health {
+      access_log off;
+      return 200 "OK\n";
+    }
+
     location /trojan-ws {
       proxy_pass http://127.0.0.1:10001;
       proxy_http_version 1.1;
@@ -180,8 +207,11 @@ http {
       proxy_set_header Connection $conn_upg;
       proxy_set_header Host $host;
       proxy_read_timeout 3600s;
+      proxy_send_timeout 3600s;
       proxy_buffering off;
+      proxy_cache off;
     }
+
     location /vless-ws {
       proxy_pass http://127.0.0.1:10002;
       proxy_http_version 1.1;
@@ -191,12 +221,14 @@ http {
       proxy_read_timeout 3600s;
       proxy_buffering off;
     }
+
     location /xhttp {
       proxy_pass http://127.0.0.1:10003;
       proxy_set_header Host $host;
       proxy_read_timeout 3600s;
       proxy_buffering off;
     }
+
     location /httpupgrade {
       proxy_pass http://127.0.0.1:10004;
       proxy_http_version 1.1;
@@ -206,7 +238,10 @@ http {
       proxy_read_timeout 3600s;
       proxy_buffering off;
     }
-    location / { return 200 '<html><body>Ready</body></html>'; }
+
+    location / {
+      return 200 '<html><body style="font-family:system-ui;text-align:center;padding:2em;"><h1>✅ Service Ready</h1></body></html>';
+    }
   }
 }
 EOF
@@ -214,12 +249,14 @@ EOF
   write_supervisor
   cat > Dockerfile <<EOF
 FROM ${XRAY_IMAGE} AS xray
-FROM openresty/openresty:alpine-fat
-RUN apk add --no-cache supervisor
+FROM openresty/openresty:1.21.4.1-0-alpine
+
+RUN apk add --no-cache supervisor tzdata
 COPY --from=xray /usr/local/bin/xray /usr/local/bin/xray
 COPY config.json /etc/xray/config.json
-COPY nginx.conf /usr/local/openresty/nginx/conf/nginx.conf
+COPY nginx.conf /etc/nginx/nginx.conf
 COPY supervisord.conf /etc/supervisord.conf
+
 RUN /usr/local/bin/xray run -test -c /etc/xray/config.json
 EXPOSE 8080
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
@@ -228,18 +265,28 @@ EOF
 
 build_caddy() {
   cat > Caddyfile <<'EOF'
-{ admin off; auto_https off }
+{
+  admin off
+  auto_https off
+  http_port 8080
+}
+
 :8080 {
   handle /health { respond "OK" 200 }
+
   @trojan path /trojan-ws*
   reverse_proxy @trojan 127.0.0.1:10001
+
   @vless path /vless-ws*
   reverse_proxy @vless 127.0.0.1:10002
+
   @xhttp path /xhttp*
   reverse_proxy @xhttp 127.0.0.1:10003
+
   @httpupgrade path /httpupgrade*
   reverse_proxy @httpupgrade 127.0.0.1:10004
-  handle { respond "<html><body>Ready</body></html>" 200 }
+
+  handle { respond "<html><body>✅ Ready</body></html>" 200 }
 }
 EOF
   PROXY_COMMAND="caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"
@@ -247,11 +294,13 @@ EOF
   cat > Dockerfile <<EOF
 FROM ${XRAY_IMAGE} AS xray
 FROM caddy:2.10.0-alpine
+
 RUN apk add --no-cache supervisor
 COPY --from=xray /usr/local/bin/xray /usr/local/bin/xray
 COPY config.json /etc/xray/config.json
 COPY Caddyfile /etc/caddy/Caddyfile
 COPY supervisord.conf /etc/supervisord.conf
+
 RUN /usr/local/bin/xray run -test -c /etc/xray/config.json
 EXPOSE 8080
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
@@ -261,42 +310,54 @@ EOF
 build_haproxy() {
   cat > haproxy.cfg <<'EOF'
 global
-  maxconn 4096
+  maxconn 1024
+  log stdout format raw local0
+
 defaults
   mode http
-  timeout connect 10s
+  log global
+  timeout connect 15s
   timeout client 3600s
   timeout server 3600s
+  timeout tunnel 3600s
+
 frontend in
   bind :8080
+
   acl health path -i /health
-  http-request return status 200 string "OK\n" if health
+  http-request return status 200 content-type text/plain string "OK\n" if health
+
   acl trojan path_beg /trojan-ws
   acl vless path_beg /vless-ws
   acl xhttp path_beg /xhttp
   acl httpupgrade path_beg /httpupgrade
+
   use_backend xray_trojan if trojan
   use_backend xray_vless if vless
   use_backend xray_xhttp if xhttp
   use_backend xray_httpupgrade if httpupgrade
+
   default_backend decoy
+
 backend xray_trojan  { server s 127.0.0.1:10001 }
 backend xray_vless   { server s 127.0.0.1:10002 }
 backend xray_xhttp   { server s 127.0.0.1:10003 }
 backend xray_httpupgrade { server s 127.0.0.1:10004 }
-backend decoy { http-request return status 200 string "Ready" }
+backend decoy { http-request return status 200 string "✅ Ready" }
 EOF
   PROXY_COMMAND="haproxy -W -db -f /usr/local/etc/haproxy/haproxy.cfg"
   write_supervisor
   cat > Dockerfile <<EOF
 FROM ${XRAY_IMAGE} AS xray
 FROM haproxy:3.2.23-alpine
+
 USER root
 RUN apk add --no-cache supervisor
 COPY --from=xray /usr/local/bin/xray /usr/local/bin/xray
 COPY config.json /etc/xray/config.json
 COPY haproxy.cfg /usr/local/etc/haproxy/haproxy.cfg
 COPY supervisord.conf /etc/supervisord.conf
+
 RUN /usr/local/bin/xray run -test -c /etc/xray/config.json
 EXPOSE 8080
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
@@ -333,27 +394,29 @@ static_resources:
               - match: { prefix: /httpupgrade }
                 route: { cluster: xray_httpupgrade, timeout: 0s, upgrade_configs: [{upgrade_type: websocket}] }
               - match: { prefix: / }
-                direct_response: { status: 200, body: { inline_string: "Ready" } }
+                direct_response: { status: 200, body: { inline_string: "✅ Ready" } }
           http_filters:
           - name: envoy.filters.http.router
             typed_config: {}
   clusters:
-  - name: xray_trojan    { connect_timeout: 10s, load_assignment: { endpoints: [{lb_endpoints: [{endpoint: {socket_address: {address: 127.0.0.1, port_value: 10001}}]}]}} }
-  - name: xray_vless     { connect_timeout: 10s, load_assignment: { endpoints: [{lb_endpoints: [{endpoint: {socket_address: {address: 127.0.0.1, port_value: 10002}}]}]}} }
-  - name: xray_xhttp     { connect_timeout: 10s, load_assignment: { endpoints: [{lb_endpoints: [{endpoint: {socket_address: {address: 127.0.0.1, port_value: 10003}}]}]}} }
-  - name: xray_httpupgrade { connect_timeout: 10s, load_assignment: { endpoints: [{lb_endpoints: [{endpoint: {socket_address: {address: 127.0.0.1, port_value: 10004}}]}]}} }
+  - name: xray_trojan    { connect_timeout: 15s, load_assignment: { endpoints: [{lb_endpoints: [{endpoint: {socket_address: {address: 127.0.0.1, port_value: 10001}}]}]}} }
+  - name: xray_vless     { connect_timeout: 15s, load_assignment: { endpoints: [{lb_endpoints: [{endpoint: {socket_address: {address: 127.0.0.1, port_value: 10002}}]}]}} }
+  - name: xray_xhttp     { connect_timeout: 15s, load_assignment: { endpoints: [{lb_endpoints: [{endpoint: {socket_address: {address: 127.0.0.1, port_value: 10003}}]}]}} }
+  - name: xray_httpupgrade { connect_timeout: 15s, load_assignment: { endpoints: [{lb_endpoints: [{endpoint: {socket_address: {address: 127.0.0.1, port_value: 10004}}]}]}} }
 EOF
   PROXY_COMMAND="envoy -c /etc/envoy/envoy.yaml"
   write_supervisor
   cat > Dockerfile <<EOF
 FROM ${XRAY_IMAGE} AS xray
 FROM envoyproxy/envoy:v1.30-latest
+
 USER root
-RUN apt-get update && apt-get install -y supervisor && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends supervisor && rm -rf /var/lib/apt/lists/*
 COPY --from=xray /usr/local/bin/xray /usr/local/bin/xray
 COPY config.json /etc/xray/config.json
 COPY envoy.yaml /etc/envoy/envoy.yaml
 COPY supervisord.conf /etc/supervisord.conf
+
 RUN /usr/local/bin/xray run -test -c /etc/xray/config.json
 EXPOSE 8080
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
@@ -364,7 +427,7 @@ build_singbox() {
   SINGBOX_VERSION="1.14.1"
   cat > sing-box.json <<EOF
 {
-  "log": { "level": "warn" },
+  "log": { "level": "error" },
   "inbounds": [
     { "type": "trojan", "tag": "trojan-ws", "listen": "127.0.0.1", "listen_port": 10001, "users": [{"password": "$TROJAN_PASSWORD"}], "transport": { "type": "ws", "path": "/trojan-ws" } },
     { "type": "vless", "tag": "vless-ws", "listen": "127.0.0.1", "listen_port": 10002, "users": [{"uuid": "$VLESS_UUID"}], "transport": { "type": "ws", "path": "/vless-ws" } }
@@ -373,12 +436,12 @@ build_singbox() {
 }
 EOF
   cat > Caddyfile <<'EOF'
-{ admin off }
+{ admin off; auto_https off }
 :8080 {
   handle /health { respond "OK" 200 }
   @trojan path /trojan-ws*; reverse_proxy @trojan 127.0.0.1:10001
   @vless path /vless-ws*; reverse_proxy @vless 127.0.0.1:10002
-  handle { respond "Ready" 200 }
+  handle { respond "✅ Ready" 200 }
 }
 EOF
   cat > supervisord.conf <<'EOF'
@@ -387,18 +450,22 @@ nodaemon=true
 [program:singbox]
 command=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
 autorestart=true
+startsecs=3
 [program:proxy]
 command=caddy run --config /etc/caddy/Caddyfile
 autorestart=true
+startsecs=3
 EOF
   cat > Dockerfile <<EOF
 FROM ghcr.io/sagernet/sing-box:${SINGBOX_VERSION} AS sb
 FROM caddy:2.10.0-alpine
+
 RUN apk add --no-cache supervisor
 COPY --from=sb /usr/local/bin/sing-box /usr/local/bin/sing-box
 COPY sing-box.json /etc/sing-box/config.json
 COPY Caddyfile /etc/caddy/Caddyfile
 COPY supervisord.conf /etc/supervisord.conf
+
 RUN /usr/local/bin/sing-box check -c /etc/sing-box/config.json
 EXPOSE 8080
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
@@ -421,24 +488,28 @@ write_dockerignore() {
 .git
 *.log
 *.tmp
+.DS_Store
 EOF
 }
 
 validate_config() {
-  if [[ "$ENGINE" == "singbox" ]]; then jq empty sing-box.json || die "JSON invalid";
-  else jq empty config.json || die "JSON invalid"; fi
-  [[ -f Dockerfile ]] || die "No Dockerfile"
+  if [[ "$ENGINE" == "singbox" ]]; then
+    jq empty sing-box.json || die "Sing-Box JSON invalid"
+  else
+    jq empty config.json || die "Xray JSON invalid"
+  fi
+  [[ -f Dockerfile ]] || die "Dockerfile missing"
 }
 
 build_and_push() {
   IMAGE_TAG="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/${SERVICE_NAME}:${BUILD_ID}"
-  info "Building: $IMAGE_TAG"
+  info "Building image..."
   gcloud builds submit --project="$PROJECT_ID" --tag="$IMAGE_TAG" --quiet
-  ok "Image pushed"
+  ok "Image built & pushed"
 }
 
 deploy_cloud_run() {
-  info "Deploying Cloud Run..."
+  info "Deploying to Cloud Run..."
   DEPLOY_ARGS=(
     gcloud run deploy "$SERVICE_NAME"
     --image="$IMAGE_TAG"
@@ -456,44 +527,54 @@ deploy_cloud_run() {
     --cpu-boost
     --session-affinity
     --allow-unauthenticated
-    # ✅ FIXED: TCP probe format — compatible sa tanang gcloud versions
-    --startup-probe=tcpSocket.port=8080,initialDelaySeconds=5,periodSeconds=5,failureThreshold=12,timeoutSeconds=3
+    # ✅ Mas taas nga deadline — dili patyon ang instance sa pagsugod
+    --startup-probe=tcpSocket.port=8080,initialDelaySeconds=10,periodSeconds=8,failureThreshold=15,timeoutSeconds=5
     --quiet
   )
   [[ "$CPU_MODE" == "instance" ]] && DEPLOY_ARGS+=(--no-cpu-throttling)
   "${DEPLOY_ARGS[@]}"
-  ok "Deployment OK"
+  ok "Deployment submitted"
 }
 
 verify_service() {
   CLOUD_RUN_URL="$(gcloud run services describe "$SERVICE_NAME" --region="$REGION" --format='value(status.url)')"
   [[ -z "$CLOUD_RUN_URL" ]] && die "No URL returned"
-  for i in {1..10}; do
-    if curl -fsS --max-time 8 "$CLOUD_RUN_URL/health" 2>/dev/null; then
-      ok "✅ Health OK — $CLOUD_RUN_URL"
+  info "Waiting for service..."
+  for i in {1..15}; do
+    sleep 3
+    if curl -fsS --max-time 10 "$CLOUD_RUN_URL/health" 2>/dev/null; then
+      ok "✅ SERVICE LIVE — $CLOUD_RUN_URL"
       return
     fi
-    info "Waiting... $i/10"
-    sleep 5
+    info "  Checking... $i/15"
   done
-  warn "Health check delayed — check Cloud Run Logs"
+  warn "⚠️ Health check delayed — check Cloud Run Logs"
+  warn "URL: $CLOUD_RUN_URL"
 }
 
 show_result() {
   DOMAIN="${CLOUD_RUN_URL#https://}"
   echo
   echo "============================================================"
-  echo -e "${GREEN}✅ SUCCESS ✅${NC}"
+  echo -e "${GREEN}✅ DEPLOYMENT COMPLETE ✅${NC}"
   echo "============================================================"
-  echo "URL:      $CLOUD_RUN_URL"
-  echo "Domain:   $DOMAIN"
-  echo "Region:   $REGION"
-  echo "Engine:   $DE"
+  echo "Service:     $SERVICE_NAME"
+  echo "URL:         $CLOUD_RUN_URL"
+  echo "Domain:      $DOMAIN"
+  echo "Region:      $REGION"
+  echo "Engine:      $DE"
+  echo "Resources:   $CPU vCPU / $MEMORY / Concurrency: $CONCURRENCY"
+  echo "Min/Max:     $MIN_INSTANCES / $MAX_INSTANCES"
+  echo
+  echo "=== CREDENTIALS (ORIGINAL PRESERVED) ==="
+  echo "VLESS UUID:      $VLESS_UUID"
+  echo "Trojan Password: $TROJAN_PASSWORD"
   echo
   echo "=== NETMOD SETTINGS ==="
   echo "Host:     $DOMAIN"
   echo "Port:     443"
-  echo "Network:  WebSocket"
+  echo "Security: TLS"
+  echo "SNI:      $DOMAIN"
   echo
   echo "VLESS-WS:"
   echo "  Path:   /vless-ws"
@@ -504,8 +585,10 @@ show_result() {
   echo "  Pass:   $TROJAN_PASSWORD"
   echo
   if [[ "$ENGINE" != "singbox" ]]; then
-    echo "XHTTP:        /xhttp"
-    echo "HTTPUpgrade:  /httpupgrade"
+    echo "XHTTP:"
+    echo "  Path:   /xhttp"
+    echo "HTTPUpgrade:"
+    echo "  Path:   /httpupgrade"
   fi
   echo "============================================================"
 }
@@ -519,29 +602,34 @@ deploy_new_service() {
   info "Service: $SERVICE_NAME"
   write_xray_config; write_dockerignore; build_engine; validate_config
   build_and_push; deploy_cloud_run; verify_service; show_result
-  read -rp "Enter to continue..."
+  read -rp "Press Enter to continue..."
 }
 
 list_services() {
   get_project
+  echo
   gcloud run services list --project="$PROJECT_ID" --format="table(metadata.name,status.url,region)"
-  read -rp "Enter..."
+  echo
+  read -rp "Press Enter..."
 }
 
 main_menu() {
   check_dependencies; get_project
   while true; do
     clear
-    echo "==== GCP-XRAY — PROBE FIXED ===="
+    echo "==== GCP-XRAY — NO INSTANCE CRASH FIX ===="
     echo "Project: $PROJECT_ID"
-    echo "1) Deploy New"
+    echo
+    echo "1) Deploy Service"
     echo "2) List Services"
     echo "3) Exit"
-    read -rp "Choice [1-3]: " MC
+    echo
+    read -rp "Select [1-3]: " MC
     case $MC in
       1) deploy_new_service ;;
       2) list_services ;;
-      3) exit 0 ;;
+      3) echo "Goodbye."; exit 0 ;;
+      *) warn "Enter 1-3" ;;
     esac
   done
 }
