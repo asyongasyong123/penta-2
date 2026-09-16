@@ -1,257 +1,540 @@
 #!/bin/bash
 set -euo pipefail
 
-# ==============================================
-# 🚀 GCP-XRAY — OPENRESTY = AUTO ALL PROTOCOLS
-# ✅ Kung OpenResty → Awtomatikong WS+HU+XHTTP+gRPC
-# ✅ Kung Envoy/HAProxy/Caddy → Mopili gihapon
-# ✅ MOHUNONG SA PRESET — DILI MAG-DEPLOY
-# ✅ Gitangtang: ASPI-SIX, Sing-Box
-# ==============================================
+# =================================================================
+# 🚀 GCP-XRAY ULTIMATE MULTI-ENGINE DEPLOYER (AUTO-TUNED)
+# ✅ ENGINES: OPENRESTY, ENVOY, HAPROXY, CADDY, SING-BOX
+# ✅ PROTOCOLS: Trojan-WS, VLESS-WS, VLESS-XHTTP, VLESS-HTTPUpgrade
+# =================================================================
 
 GREEN='\033[1;32m'
 RED='\033[1;31m'
 YELLOW='\033[1;33m'
 CYAN='\033[1;36m'
-MAGENTA='\033[1;35m'
 NC='\033[0m'
 
-# ==============================================
-# AUTO INSTALL JQ
-# ==============================================
 if ! command -v jq &> /dev/null; then
-  echo -e "\n${YELLOW}⚠️ Installing jq...${NC}"
-  sudo apt update -qq && sudo apt install -y -qq jq || { echo -e "${RED}❌ jq install failed${NC}"; exit 1; }
+  echo -e "\n${YELLOW}⚠️ Installing required tool: jq...${NC}"
+  sudo apt update -qq && sudo apt install -y -qq jq || {
+    echo -e "${RED}❌ Failed to install jq!${NC}"
+    exit 1
+  }
 fi
 
-# ==============================================
-# LIST DEPLOYED SERVICES
-# ==============================================
 list_deployed_services() {
   echo -e "\n======================================"
-  echo -e "${CYAN}📋 DEPLOYED SERVICES${NC}"
+  echo -e "${CYAN}📋 ALL DEPLOYED GCP-XRAY SERVICES${NC}"
   echo -e "======================================"
   PROJECT_ID="$(gcloud config get-value project 2>/dev/null)"
-  echo "Project: $PROJECT_ID"
+  
+  SERVICES=$(gcloud run services list \
+    --format="value(metadata.name, status.url, region, metadata.creationTimestamp.date(%Y-%m-%d))" \
+    --project="$PROJECT_ID" 2>/dev/null)
 
-  declare -A REGION_NAMES=(
-    ["us-central1"]="Iowa 🇺🇸" ["us-east1"]="S.Carolina 🇺🇸"
-    ["asia-east1"]="Taiwan 🇹🇼 — RECOMMENDED"
-    ["asia-southeast1"]="Singapore 🇸🇬" ["europe-west4"]="Netherlands 🇳🇱"
-  )
-
-  SERVICES=$(gcloud run services list --format="value(metadata.name,status.url,region,metadata.creationTimestamp.date(%Y-%m-%d))" --project="$PROJECT_ID" 2>/dev/null)
-  [ -z "$SERVICES" ] && { echo -e "${YELLOW}No services yet.${NC}"; read -p "[Enter] Back..."; return; }
-
-  local COUNT=1
-  while IFS=$'\t' read -r NAME URL REGION CREATED; do
-    [ -z "$NAME" ] && continue
-    FULL_REGION="${REGION_NAMES[$REGION]:-$REGION}"
-    DETAILS=$(gcloud run services describe "$NAME" --region "$REGION" --project="$PROJECT_ID" --format=json 2>/dev/null || true)
-    if [ -n "$DETAILS" ]; then
-      MEM=$(echo "$DETAILS" | jq -r '.spec.template.spec.containers[0].resources.limits.memory // "1Gi"')
-      CPU=$(echo "$DETAILS" | jq -r '.spec.template.spec.containers[0].resources.limits.cpu // "1"')
-      MIN=$(echo "$DETAILS" | jq -r '.spec.template.spec.minInstances // "0"')
-      MAX=$(echo "$DETAILS" | jq -r '.spec.template.spec.maxInstances // "2"')
-      CONCUR=$(echo "$DETAILS" | jq -r '.spec.template.spec.containerConcurrency // "80"')
-      echo -e "${GREEN}=== #$COUNT $NAME ${NC}"
-      echo "🔗 $URL | 📍 $REGION → $FULL_REGION"
-      echo "💾 $MEM | 🖥️ $CPU vCPU | ⚖️ Min:$MIN/Max:$MAX | 🔂 $CONCUR"
-    else
-      echo -e "${GREEN}=== #$COUNT $NAME ${NC}"
-      echo "🔗 $URL | 📍 $REGION"
-    fi
-    ((COUNT++))
-  done <<< "$SERVICES"
-  read -p $'\n[Enter] Back to Menu...'
-}
-
-# ==============================================
-# DELETE SERVICE
-# ==============================================
-delete_service() {
-  echo -e "\n${RED}🗑️ DELETE SERVICE${NC}"
-  PROJECT_ID="$(gcloud config get-value project 2>/dev/null)"
-  read -p "Service Name: " DEL_NAME
-  read -p "Region: " DEL_REGION
-  if [ -z "$DEL_NAME" ] || [ -z "$DEL_REGION" ]; then
-    echo -e "${YELLOW}Cancelled.${NC}"; return
+  if [ -z "$SERVICES" ]; then
+    echo -e "${RED}❌ No services found.${NC}"
+  else
+    local COUNT=1
+    while IFS=$'\t' read -r NAME URL REGION CREATED; do
+      [ -z "$NAME" ] && continue
+      echo -e "${GREEN}=== SERVICE #$COUNT ===${NC}"
+      echo "🔹 Name:         $NAME"
+      echo "🔹 URL:          $URL"
+      echo "🔹 Region:       $REGION"
+      echo "🔹 Created:      $CREATED"
+      echo ""
+      ((COUNT++))
+    done <<< "$SERVICES"
   fi
-  echo -e "${RED}Deleting $DEL_NAME @ $DEL_REGION...${NC}"
-  gcloud run services delete "$DEL_NAME" --region="$DEL_REGION" --project="$PROJECT_ID" --quiet
-  echo -e "${GREEN}✅ DELETED — Safe to exit now${NC}"
-  read -p "[Enter] Back..."
+  read -p "Press [Enter] to return..."
 }
 
-# ==============================================
-# REGION SELECTOR
-# ==============================================
 select_region() {
-  echo -e "\n=== SELECT REGION ==="
-  echo "1) us-central1      🇺🇸   5) asia-east1       🇹🇼 RECOMMENDED"
-  echo "2) us-east1         🇺🇸   6) asia-southeast1  🇸🇬"
-  echo "3) us-west1         🇺🇸   7) asia-northeast1   🇯🇵"
-  echo "4) us-east4         🇺🇸   8) europe-west4     🇳🇱"
-  while true; do
-    read -p "Choice [1-8]: " RCH
-    case $RCH in
-      1) REGION="us-central1"; break ;;
-      2) REGION="us-east1"; break ;;
-      3) REGION="us-west1"; break ;;
-      4) REGION="us-east4"; break ;;
-      5) REGION="asia-east1"; break ;;
-      6) REGION="asia-southeast1"; break ;;
-      7) REGION="asia-northeast1"; break ;;
-      8) REGION="europe-west4"; break ;;
-      *) echo -e "${RED}Enter 1-8 only${NC}" ;;
-    esac
-  done
-  echo -e "${GREEN}✅ Region: $REGION${NC}"
+  echo -e "\n=== GCP CLOUD RUN REGION SELECTION ==="
+  echo "1) asia-east1       (Taiwan 🇹🇼 — RECOMMENDED)"
+  echo "2) asia-southeast1  (Singapore 🇸🇬)"
+  echo "3) asia-northeast1  (Tokyo, Japan 🇯🇵)"
+  echo "4) asia-northeast3  (Seoul, South Korea 🇰🇷)"
+  echo "5) us-central1      (Iowa, US 🇺🇸)"
+  echo "6) europe-west1     (Belgium 🇧🇪)"
+  echo "0) Enter custom region code"
+  read -p "Select region [0-6]: " REGION_NUM
+  case $REGION_NUM in
+    1) REGION="asia-east1" ;;
+    2) REGION="asia-southeast1" ;;
+    3) REGION="asia-northeast1" ;;
+    4) REGION="asia-northeast3" ;;
+    5) REGION="us-central1" ;;
+    6) REGION="europe-west1" ;;
+    0) read -p "Type full region code: " REGION ;;
+    *) REGION="asia-east1" ;;
+  esac
 }
 
-# ==============================================
-# TRANSPORT SELECTOR — conditional
-# ==============================================
-select_transport() {
-  # Kung OpenResty → AUTO ALL, dili na mangutana
-  if [ "$ENGINE" = "openresty" ]; then
-    TRANS="all"
-    DISPTR="WS+HU+XHTTP+gRPC (AUTO-ALL)"
-    echo -e "\n${MAGENTA}═══════════════════════════════════════════${NC}"
-    echo -e "${GREEN}✅ OPENRESTY DETECTED → AUTO-ALL PROTOCOLS${NC}"
-    echo -e "   ✅ WebSocket  ✅ HTTPUpgrade  ✅ XHTTP  ✅ gRPC"
-    echo -e "${MAGENTA}═══════════════════════════════════════════${NC}"
-    return 0
-  fi
-
-  # Kung lain nga engine → mopili ra gihapon
-  echo -e "\n${MAGENTA}=========================================${NC}"
-  echo -e "${MAGENTA}    SELECT TRANSPORT PROTOCOL${NC}"
-  echo -e "${MAGENTA}=========================================${NC}"
-  echo "1) WebSocket        — Universal / Most Stable ✅"
-  echo "2) HTTPUpgrade      — Fast / Telco-Friendly"
-  echo "3) XHTTP            — Stealth / Low Detection"
-  echo "4) gRPC             — High Throughput / HTTP/2"
-  echo "5) ALL (4-in-1)     — Deploy Every Transport"
-  while true; do
-    read -p "Transport [1-5]: " TCH
-    case $TCH in
-      1) TRANS="ws"; DISPTR="WebSocket"; break ;;
-      2) TRANS="httpupgrade"; DISPTR="HTTPUpgrade"; break ;;
-      3) TRANS="xhttp"; DISPTR="XHTTP"; break ;;
-      4) TRANS="grpc"; DISPTR="gRPC"; break ;;
-      5) TRANS="all"; DISPTR="ALL-TRANSPORTS"; break ;;
-      *) echo -e "${RED}Enter 1-5 only${NC}" ;;
-    esac
-  done
-  echo -e "${GREEN}✅ Transport: $DISPTR${NC}"
-}
-
-# ==============================================
-# DEPLOY — STOP AT PRESET ✅
-# ==============================================
 deploy_new_service() {
   select_region
 
-  # First pilia ang ENGINE
-  echo -e "\n${CYAN}SELECT ENGINE:${NC}"
-  echo "──────────────────────────────────────────────"
-  echo "  1) 🚀 OpenResty  → AUTO-ALL PROTOCOLS ✅"
-  echo "     (WS + HTTPUpgrade + XHTTP + gRPC — tanan sabay)"
-  echo "  2) Envoy         → Mopili og transport"
-  echo "  3) HAProxy       → Mopili og transport"
-  echo "  4) Caddy         → Mopili og transport"
-  echo "──────────────────────────────────────────────"
-  while true; do
-    read -p "Engine [1-4]: " ECH
-    case $ECH in
-      1) ENGINE="openresty"; DISPENG="OpenResty"; break ;;
-      2) ENGINE="envoy"; DISPENG="Envoy"; break ;;
-      3) ENGINE="haproxy"; DISPENG="HAProxy"; break ;;
-      4) ENGINE="caddy"; DISPENG="Caddy"; break ;;
-      *) echo -e "${RED}Enter 1-4 only${NC}" ;;
-    esac
-  done
-
-  # Transport selector — AUTO kung OpenResty
-  select_transport
-
   PROJECT_ID="$(gcloud config get-value project 2>/dev/null)"
-  [ -z "$PROJECT_ID" ] && { echo -e "${RED}Run: gcloud config set project YOUR_ID${NC}"; return; }
+  if [ -z "$PROJECT_ID" ]; then
+      echo -e "${RED}❌ No project set! Run: gcloud config set project YOUR_ID${NC}"
+      return
+  fi
 
-  RAND=$(openssl rand -hex 2)
-  NAME="gcp-xray-${ENGINE}-${TRANS}-${RAND}"
+  gcloud services enable run.googleapis.com cloudbuild.googleapis.com --project="$PROJECT_ID" --quiet
 
-  echo -e "\n${CYAN}⚙️ RESOURCE PRESETS — QWIKLABS-SAFE${NC}"
-  echo "──────────────────────────────────────────────"
-  echo "  1) Light    → 512Mi/0.5vCPU | Min:0 Max:2 | Conc:80"
-  echo "  2) Balanced → 1Gi/1vCPU     | Min:0 Max:2 | Conc:80  ✅ RECOMMENDED"
-  echo "  3) Max      → 2Gi/2vCPU     | Min:0 Max:3 | Conc:80"
-  echo "──────────────────────────────────────────────"
+  echo -e "\n${CYAN}=========================================${NC}"
+  echo -e "${GREEN}          CHOOSE PROXY ENGINE${NC}"
+  echo -e "${CYAN}=========================================${NC}"
+  echo "1) OpenResty          - [Anti-DDoS + Nginx Core]"
+  echo "2) Envoy Proxy        - [High Throughput / gRPC/HTTP2]"
+  echo "3) HAProxy            - [Ultra Low Latency]"
+  echo "4) Caddy Proxy        - [Modern / Native HTTPUpgrade Support]"
+  echo "5) Sing-Box Engine    - [Direct Core Server]"
   while true; do
-    read -p "Preset [1-3]: " PCH
-    case $PCH in
-      1) MEMORY="512Mi"; CPU="0.5"; MIN_INST=0; MAX_INST=2; CONCURRENCY=80; break ;;
-      3) MEMORY="2Gi"; CPU="2"; MIN_INST=0; MAX_INST=3; CONCURRENCY=80; break ;;
-      2|*) MEMORY="1Gi"; CPU="1"; MIN_INST=0; MAX_INST=2; CONCURRENCY=80; break ;;
-    esac
+      read -p "Select Engine [1-5]: " ENGINE_CHOICE
+      case $ENGINE_CHOICE in
+          1) ENGINE="openresty"; DISPLAY_ENGINE="OpenResty"; break ;;
+          2) ENGINE="envoy"; DISPLAY_ENGINE="Envoy Proxy"; break ;;
+          3) ENGINE="haproxy"; DISPLAY_ENGINE="HAProxy"; break ;;
+          4) ENGINE="caddy"; DISPLAY_ENGINE="Caddy Proxy"; break ;;
+          5) ENGINE="singbox"; DISPLAY_ENGINE="Sing-Box Engine"; break ;;
+          *) echo -e "${RED}Enter 1-5 only${NC}" ;;
+      esac
   done
 
-  # ==============================================
-  # ✅ MOHUNONG DINHI — DILI MAG-BUILD/DEPLOY
-  # ==============================================
-  echo -e "\n${GREEN}════════════════════════════════════════════════${NC}"
-  echo -e "${GREEN}✅ ALL SETTINGS CONFIRMED — STOPPED HERE${NC}"
-  echo -e "${GREEN}════════════════════════════════════════════════${NC}"
-  echo -e "📦 Service Name:   $NAME"
-  echo -e "📍 Region:        $REGION"
-  echo -e "⚙️ Engine:        $DISPENGINE"
-  echo -e "🔌 Transport:     $DISPTR"
-  echo -e "💾 Memory:        $MEMORY"
-  echo -e "🖥️ CPU:           $CPU vCPU"
-  echo -e "🔄 Min Instances: $MIN_INST"
-  echo -e "🔄 Max Instances: $MAX_INST"
-  echo -e "🔂 Concurrency:   $CONCURRENCY"
-  if [ "$ENGINE" = "openresty" ]; then
-    echo -e "${CYAN}📋 Endpoints:${NC}"
-    echo -e "   WS-Trojan:    /trojan-ws"
-    echo -e "   WS-Vless:     /vless-ws"
-    echo -e "   HU-Trojan:    /trojan-hu"
-    echo -e "   HU-Vless:     /vless-hu"
-    echo -e "   XH-Trojan:    /trojan-xh"
-    echo -e "   XH-Vless:     /vless-xh"
-    echo -e "   gRPC-Trojan:  /trojangrpc"
-    echo -e "   gRPC-Vless:   /vlessgrpc"
+  RAND=$(openssl rand -hex 3)
+  CLOUD_RUN_SERVICE_NAME="gcp-xray-${ENGINE}-$RAND"
+
+  echo -e "\n${CYAN}=========================================${NC}"
+  echo -e "${GREEN}    RESOURCE CONFIG MODE (OPTIMIZED TUNING)${NC}"
+  echo -e "${CYAN}=========================================${NC}"
+  echo -e "${GREEN}1) HIGH-PERFORMANCE PRESETS (Auto-Tuned CPU/RAM) ✅${NC}"
+  echo -e "${YELLOW}2) MANUAL SETUP${NC}"
+  while true; do
+      read -p "Select Mode [1-2]: " RES_MODE
+      case $RES_MODE in
+          1)
+              echo -e "\n${CYAN}--- AUTO OPTIMIZED PRESETS ---${NC}"
+              echo "1) Ultra-Fast / Low Latency : 2 vCPU + 512Mi RAM (Concur: 1000) 🔥 [RECOMMENDED]"
+              echo "2) Standard Daily Driver    : 1 vCPU + 512Mi RAM (Concur: 500)  ⚡ [Qwiklabs Safe]"
+              echo "3) Multi-Stream / Heavy Duty: 2 vCPU + 1Gi RAM   (Concur: 1000, Min: 1) 🚀"
+              read -p "Choose preset [1-3]: " AUTO_CHOICE
+              
+              BILLING_FLAG="--no-cpu-throttling"
+
+              case $AUTO_CHOICE in
+                  1) 
+                    MEMORY="512Mi"; CPU="2"
+                    MIN_INST=0; MAX_INST=3; CONCURRENCY=1000; TIMEOUT=3600
+                    ;;
+                  2) 
+                    MEMORY="512Mi"; CPU="1"
+                    MIN_INST=0; MAX_INST=2; CONCURRENCY=500; TIMEOUT=3600
+                    ;;
+                  3) 
+                    MEMORY="1Gi"; CPU="2"
+                    MIN_INST=1; MAX_INST=3; CONCURRENCY=1000; TIMEOUT=3600
+                    ;;
+                  *) 
+                    MEMORY="512Mi"; CPU="2"
+                    MIN_INST=0; MAX_INST=3; CONCURRENCY=1000; TIMEOUT=3600
+                    ;;
+              esac
+              echo -e "${GREEN}✅ Applied Preset: $CPU vCPU | $MEMORY RAM | Concurrency: $CONCURRENCY${NC}"
+              break
+              ;;
+          2)
+              BILLING_FLAG="--no-cpu-throttling"
+              read -p "Memory (e.g. 512Mi, 1Gi): " MEMORY
+              read -p "vCPU (1 or 2): " CPU
+              MIN_INST=0
+              MAX_INST=2
+              CONCURRENCY=1000
+              TIMEOUT=3600
+              break
+              ;;
+          *) echo -e "${RED}Enter 1 or 2 only${NC}" ;;
+      esac
+  done
+
+  BUILD_DIR=$(mktemp -d)
+  trap 'rm -rf "$BUILD_DIR"' EXIT
+  cd "$BUILD_DIR" || exit 1
+
+  # Generate Xray Config
+  cat > config.json <<'EOF'
+{
+  "log": { "loglevel": "warning" },
+  "dns": { "servers": ["8.8.8.8", "8.8.4.4"], "strategy": "UseIPv4" },
+  "policy": {
+    "levels": {
+      "0": { "handshake": 10, "connIdle": 3600, "uplinkOnly": 0, "downlinkOnly": 0, "bufferSize": 2048 }
+    }
+  },
+  "inbounds": [
+    {
+      "tag": "trojan-ws", "port": 10001, "listen": "127.0.0.1", "protocol": "trojan",
+      "settings": { "clients": [{"password": "gcp-xray", "level": 0}] },
+      "streamSettings": { "network": "ws", "wsSettings": { "path": "/trojan-ws" }, "sockopt": { "tcpNoDelay": true } }
+    },
+    {
+      "tag": "vless-ws", "port": 10002, "listen": "127.0.0.1", "protocol": "vless",
+      "settings": { "clients": [{"id": "a1b2c3d4-5678-40ef-98ab-cdef01234567", "level": 0}], "decryption": "none" },
+      "streamSettings": { "network": "ws", "wsSettings": { "path": "/vless-ws" }, "sockopt": { "tcpNoDelay": true } }
+    },
+    {
+      "tag": "vless-xhttp", "port": 10003, "listen": "127.0.0.1", "protocol": "vless",
+      "settings": { "clients": [{"id": "a1b2c3d4-5678-40ef-98ab-cdef01234567", "level": 0}], "decryption": "none" },
+      "streamSettings": { "network": "xhttp", "xhttpSettings": { "path": "/xhttp", "mode": "auto" }, "sockopt": { "tcpNoDelay": true } }
+    },
+    {
+      "tag": "vless-httpupgrade", "port": 10004, "listen": "127.0.0.1", "protocol": "vless",
+      "settings": { "clients": [{"id": "a1b2c3d4-5678-40ef-98ab-cdef01234567", "level": 0}], "decryption": "none" },
+      "streamSettings": { "network": "httpupgrade", "httpupgradeSettings": { "path": "/httpupgrade" }, "sockopt": { "tcpNoDelay": true } }
+    }
+  ],
+  "outbounds": [{ "protocol": "freedom", "tag": "direct", "settings": { "domainStrategy": "UseIPv4" } }]
+}
+EOF
+
+  cat > log_cleaner.sh <<'EOF'
+#!/bin/sh
+while true; do
+  sleep 300
+  rm -rf /tmp/* /var/log/*.log 2>/dev/null || true
+done
+EOF
+  chmod +x log_cleaner.sh
+
+  DECOY_HTML='<!DOCTYPE html><html><head><title>System Operational</title></head><body><h1>Service Ready</h1></body></html>'
+
+  # Dockerfile & Container Config Selection
+  if [ "$ENGINE" = "caddy" ]; then
+    cat > Caddyfile <<EOF
+{
+    admin off
+    http_port 8080
+}
+:8080 {
+    handle /health { respond "OK\n" 200 }
+    @ws_trojan { path /trojan-ws* \n header Connection *Upgrade* \n header Upgrade websocket }
+    reverse_proxy @ws_trojan 127.0.0.1:10001
+    @ws_vless { path /vless-ws* \n header Connection *Upgrade* \n header Upgrade websocket }
+    reverse_proxy @ws_vless 127.0.0.1:10002
+    handle /xhttp* { reverse_proxy 127.0.0.1:10003 }
+    handle /httpupgrade* { reverse_proxy 127.0.0.1:10004 }
+    handle { respond "$DECOY_HTML" 200 }
+}
+EOF
+    cat > supervisord.conf <<EOF
+[supervisord]
+nodaemon=true
+logfile=/dev/null
+[program:xray]
+command=/usr/local/bin/xray run -c /etc/xray.json
+autorestart=true
+[program:caddy]
+command=caddy run --config /etc/Caddyfile --adapter caddyfile
+autorestart=true
+[program:logcleaner]
+command=/usr/local/bin/log_cleaner.sh
+autorestart=true
+EOF
+    cat > Dockerfile <<'EOF'
+FROM alpine:3.20 AS builder
+RUN apk add --no-cache curl unzip ca-certificates
+RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip && unzip -q xray.zip xray && chmod +x xray
+FROM caddy:2.8-alpine
+RUN apk add --no-cache supervisor
+COPY --from=builder /xray /usr/local/bin/xray
+COPY config.json /etc/xray.json
+COPY Caddyfile /etc/Caddyfile
+COPY supervisord.conf /etc/supervisord.conf
+COPY log_cleaner.sh /usr/local/bin/log_cleaner.sh
+RUN chmod +x /usr/local/bin/xray /usr/local/bin/log_cleaner.sh
+EXPOSE 8080
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
+EOF
+
+  elif [ "$ENGINE" = "envoy" ]; then
+    cat > envoy.yaml <<EOF
+static_resources:
+  listeners:
+  - name: listener_0
+    address:
+      socket_address: { address: 0.0.0.0, port_value: 8080 }
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: ingress_http
+          route_config:
+            name: local_route
+            virtual_hosts:
+            - name: local_service
+              domains: ["*"]
+              routes:
+              - match: { prefix: "/trojan-ws" }
+                route: { cluster: xray_trojan, upgrade_configs: [{ upgrade_type: "websocket" }] }
+              - match: { prefix: "/vless-ws" }
+                route: { cluster: xray_vless, upgrade_configs: [{ upgrade_type: "websocket" }] }
+              - match: { prefix: "/xhttp" }
+                route: { cluster: xray_xhttp }
+              - match: { prefix: "/httpupgrade" }
+                route: { cluster: xray_httpupgrade, upgrade_configs: [{ upgrade_type: "CONNECT" }] }
+          http_filters:
+          - name: envoy.filters.http.router
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+  clusters:
+  - name: xray_trojan
+    type: STATIC
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: xray_trojan
+      endpoints:
+      - lb_endpoints:
+        - endpoint: { address: { socket_address: { address: 127.0.0.1, port_value: 10001 } } }
+  - name: xray_vless
+    type: STATIC
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: xray_vless
+      endpoints:
+      - lb_endpoints:
+        - endpoint: { address: { socket_address: { address: 127.0.0.1, port_value: 10002 } } }
+  - name: xray_xhttp
+    type: STATIC
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: xray_xhttp
+      endpoints:
+      - lb_endpoints:
+        - endpoint: { address: { socket_address: { address: 127.0.0.1, port_value: 10003 } } }
+  - name: xray_httpupgrade
+    type: STATIC
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: xray_httpupgrade
+      endpoints:
+      - lb_endpoints:
+        - endpoint: { address: { socket_address: { address: 127.0.0.1, port_value: 10004 } } }
+EOF
+    cat > supervisord.conf <<EOF
+[supervisord]
+nodaemon=true
+logfile=/dev/null
+[program:xray]
+command=/usr/local/bin/xray run -c /etc/xray.json
+autorestart=true
+[program:envoy]
+command=envoy -c /etc/envoy.yaml
+autorestart=true
+[program:logcleaner]
+command=/usr/local/bin/log_cleaner.sh
+autorestart=true
+EOF
+    cat > Dockerfile <<'EOF'
+FROM alpine:3.20 AS builder
+RUN apk add --no-cache curl unzip ca-certificates
+RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip && unzip -q xray.zip xray && chmod +x xray
+FROM envoyproxy/envoy:v1.30-latest
+USER root
+RUN apt-get update && apt-get install -y supervisor && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /xray /usr/local/bin/xray
+COPY config.json /etc/xray.json
+COPY envoy.yaml /etc/envoy.yaml
+COPY supervisord.conf /etc/supervisord.conf
+COPY log_cleaner.sh /usr/local/bin/log_cleaner.sh
+RUN chmod +x /usr/local/bin/xray /usr/local/bin/log_cleaner.sh
+EXPOSE 8080
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
+EOF
+
+  elif [ "$ENGINE" = "haproxy" ]; then
+    cat > haproxy.cfg <<EOF
+global
+    log type stderr format local daemon
+    maxconn 10000
+
+defaults
+    log global
+    mode http
+    option httplog
+    timeout connect 10s
+    timeout client 3600s
+    timeout server 3600s
+
+frontend http_in
+    bind *:8080
+    acl is_trojan path_beg /trojan-ws
+    acl is_vless path_beg /vless-ws
+    acl is_xhttp path_beg /xhttp
+    acl is_httpupgrade path_beg /httpupgrade
+    
+    use_backend bk_trojan if is_trojan
+    use_backend bk_vless if is_vless
+    use_backend bk_xhttp if is_xhttp
+    use_backend bk_httpupgrade if is_httpupgrade
+    default_backend bk_decoy
+
+backend bk_trojan
+    server xray1 127.0.0.1:10001
+
+backend bk_vless
+    server xray2 127.0.0.1:10002
+
+backend bk_xhttp
+    server xray3 127.0.0.1:10003
+
+backend bk_httpupgrade
+    server xray4 127.0.0.1:10004
+
+backend bk_decoy
+    http-request return status 200 content-type "text/html" string "$DECOY_HTML"
+EOF
+    cat > supervisord.conf <<EOF
+[supervisord]
+nodaemon=true
+logfile=/dev/null
+[program:xray]
+command=/usr/local/bin/xray run -c /etc/xray.json
+autorestart=true
+[program:haproxy]
+command=haproxy -f /usr/local/etc/haproxy/haproxy.cfg
+autorestart=true
+[program:logcleaner]
+command=/usr/local/bin/log_cleaner.sh
+autorestart=true
+EOF
+    cat > Dockerfile <<'EOF'
+FROM alpine:3.20 AS builder
+RUN apk add --no-cache curl unzip ca-certificates
+RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip && unzip -q xray.zip xray && chmod +x xray
+FROM haproxy:2.8-alpine
+USER root
+RUN apk add --no-cache supervisor
+COPY --from=builder /xray /usr/local/bin/xray
+COPY config.json /etc/xray.json
+COPY haproxy.cfg /usr/local/etc/haproxy/haproxy.cfg
+COPY supervisord.conf /etc/supervisord.conf
+COPY log_cleaner.sh /usr/local/bin/log_cleaner.sh
+RUN chmod +x /usr/local/bin/xray /usr/local/bin/log_cleaner.sh
+EXPOSE 8080
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
+EOF
+
+  elif [ "$ENGINE" = "singbox" ]; then
+    cat > supervisord.conf <<EOF
+[supervisord]
+nodaemon=true
+logfile=/dev/null
+[program:xray]
+command=/usr/local/bin/xray run -c /etc/xray.json
+autorestart=true
+[program:logcleaner]
+command=/usr/local/bin/log_cleaner.sh
+autorestart=true
+EOF
+    sed -i 's/"port": 10001/"port": 8080/g' config.json
+    sed -i 's/"listen": "127.0.0.1"/"listen": "0.0.0.0"/g' config.json
+
+    cat > Dockerfile <<'EOF'
+FROM alpine:3.20 AS builder
+RUN apk add --no-cache curl unzip ca-certificates
+RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip && unzip -q xray.zip xray && chmod +x xray
+FROM alpine:3.20
+RUN apk add --no-cache supervisor ca-certificates
+COPY --from=builder /xray /usr/local/bin/xray
+COPY config.json /etc/xray.json
+COPY supervisord.conf /etc/supervisord.conf
+COPY log_cleaner.sh /usr/local/bin/log_cleaner.sh
+RUN chmod +x /usr/local/bin/xray /usr/local/bin/log_cleaner.sh
+EXPOSE 8080
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
+EOF
+
+  else
+    # Default OpenResty Engine
+    cat > nginx.conf <<EOF
+worker_processes auto;
+events { worker_connections 8192; }
+http {
+  keepalive_timeout 3600s;
+  server {
+    listen 8080;
+    location /health { return 200 "OK\n"; }
+    location /trojan-ws { proxy_pass http://127.0.0.1:10001; proxy_http_version 1.1; proxy_set_header Upgrade \$http_upgrade; proxy_set_header Connection "upgrade"; proxy_read_timeout 3600s; }
+    location /vless-ws { proxy_pass http://127.0.0.1:10002; proxy_http_version 1.1; proxy_set_header Upgrade \$http_upgrade; proxy_set_header Connection "upgrade"; proxy_read_timeout 3600s; }
+    location /xhttp { proxy_pass http://127.0.0.1:10003; proxy_http_version 1.1; proxy_read_timeout 3600s; }
+    location /httpupgrade { proxy_pass http://127.0.0.1:10004; proxy_http_version 1.1; proxy_set_header Upgrade \$http_upgrade; proxy_set_header Connection "upgrade"; proxy_read_timeout 3600s; }
+    location / { return 200 '$DECOY_HTML'; }
+  }
+}
+EOF
+    cat > supervisord.conf <<EOF
+[supervisord]
+nodaemon=true
+logfile=/dev/null
+[program:xray]
+command=/usr/local/bin/xray run -c /etc/xray.json
+autorestart=true
+[program:openresty]
+command=/usr/local/openresty/bin/openresty -g "daemon off;"
+autorestart=true
+[program:logcleaner]
+command=/usr/local/bin/log_cleaner.sh
+autorestart=true
+EOF
+    cat > Dockerfile <<'EOF'
+FROM alpine:3.20 AS builder
+RUN apk add --no-cache curl unzip ca-certificates
+RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip && unzip -q xray.zip xray && chmod +x xray
+FROM openresty/openresty:alpine-fat
+RUN apk add --no-cache supervisor
+COPY --from=builder /xray /usr/local/bin/xray
+COPY config.json /etc/xray.json
+COPY nginx.conf /usr/local/openresty/nginx/conf/nginx.conf
+COPY supervisord.conf /etc/supervisord.conf
+COPY log_cleaner.sh /usr/local/bin/log_cleaner.sh
+RUN chmod +x /usr/local/bin/xray /usr/local/bin/log_cleaner.sh
+EXPOSE 8080
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
+EOF
   fi
-  echo -e "${YELLOW}⚠️ Build & Deploy step SKIPPED as requested${NC}"
-  echo -e "${GREEN}════════════════════════════════════════════════${NC}"
-  echo -e "\nPress Enter to return to Menu..."
-  read -r
+
+  echo -e "${CYAN}🔨 Building image ($ENGINE)...${NC}"
+  gcloud builds submit --project="$PROJECT_ID" --tag gcr.io/$PROJECT_ID/$CLOUD_RUN_SERVICE_NAME . --quiet
+
+  echo -e "${CYAN}🚀 Deploying to Cloud Run...${NC}"
+  gcloud run deploy "$CLOUD_RUN_SERVICE_NAME" \
+    --image gcr.io/$PROJECT_ID/$CLOUD_RUN_SERVICE_NAME \
+    --project="$PROJECT_ID" --platform managed --region "$REGION" --allow-unauthenticated \
+    --port 8080 --memory "$MEMORY" --cpu "$CPU" --concurrency "$CONCURRENCY" \
+    --timeout "$TIMEOUT" --min-instances "$MIN_INST" --max-instances "$MAX_INST" \
+    --session-affinity --execution-environment gen2 $BILLING_FLAG --cpu-boost --quiet
+
+  CLOUD_RUN_URL=$(gcloud run services describe "$CLOUD_RUN_SERVICE_NAME" --project="$PROJECT_ID" --region="$REGION" --format='value(status.url)')
+  DOMAIN=$(echo "$CLOUD_RUN_URL" | sed 's|https://||')
+
+  echo -e "\n${GREEN}✅ DEPLOYED SUCCESSFULLY!${NC}"
+  echo -e "🔹 HOST: $DOMAIN"
+  read -p 'Press [Enter] to return...'
 }
 
-# ==============================================
-# MAIN MENU
-# ==============================================
 while true; do
   clear
-  echo -e "${CYAN}"
-  echo "╔════════════════════════════════════════════════════╗"
-  echo "║  🚀 GCP-XRAY — OPENRESTY=AUTO-ALL v2.2               ║"
-  echo "║  OpenResty = TANAN PROTOCOLS awtomatik ✅            ║"
-  echo "║  Stop at Preset — NO auto deploy                    ║"
-  echo "╚════════════════════════════════════════════════════╝${NC}"
-  echo ""
-  echo "  1) 🚀 CONFIGURE SERVICE"
-  echo "  2) 📋 LIST DEPLOYED SERVICES"
-  echo "  3) 🗑️ DELETE SERVICE"
-  echo "  0) ❌ EXIT"
-  echo ""
-  read -p "Choice [0-3]: " MAIN_CHOICE
-  case $MAIN_CHOICE in
+  echo "======================================"
+  echo "GCP-XRAY AUTO-TUNED DEPLOYER MENU"
+  echo "======================================"
+  echo "1) Deploy New Service"
+  echo "2) List Services"
+  echo "3) Exit"
+  read -p "Select [1-3]: " MENU_CHOICE
+  case $MENU_CHOICE in
     1) deploy_new_service ;;
     2) list_deployed_services ;;
-    3) delete_service ;;
-    0) echo -e "${GREEN}Bye! 👋${NC}"; exit 0 ;;
-    *) echo -e "${RED}Invalid choice${NC}"; sleep 1 ;;
+    3) exit 0 ;;
   esac
 done
