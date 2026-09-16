@@ -2,10 +2,10 @@
 set -euo pipefail
 
 # ===================================================
-# 🚀 GCP-XHTTP — COMPLETE FIXED SCRIPT
-# ✅ Fixed: Removed incompatible xtls-rprx-vision flow from xhttp
-# ✅ Fixed: Added gcompat/libc6-compat for Alpine Xray binary compatibility
-# ✅ Fixed: Non-blocking web engine startup for Cloud Run health checks
+# 🚀 GCP-XHTTP — FULLY FIXED SCRIPT
+# ✅ Fixed: Upgraded Xray to v25.1.1 for native xhttp protocol support
+# ✅ Fixed: Added OpenResty binary PATH resolution (/usr/local/openresty/bin)
+# ✅ Fixed: Included gcompat/libc6-compat for Alpine binary runtime
 # ===================================================
 
 GREEN='\033[1;32m'
@@ -64,10 +64,10 @@ case $REGION_CHOICE in
 esac
 
 SERVICE_NAME="gcp-xhttp-dual-${ENGINE}"
-XRAY_VERSION="1.8.24"
+XRAY_VERSION="25.1.1"
 
 # ==============================================
-# XRAY CONFIG (Flow removed for xhttp protocol)
+# XRAY CONFIG
 # ==============================================
 cat > config.json <<EOF
 {
@@ -127,7 +127,7 @@ cat > decoy.html <<'EOF'
 EOF
 
 # ==============================================
-# ENGINE CONFIGS + FIXED STARTUP & DOCKERFILES
+# ENGINE CONFIGS
 # ==============================================
 if [ "$ENGINE" = "openresty" ]; then
   cat > nginx.conf <<'EOF'
@@ -162,12 +162,13 @@ EOF
   cat > run.sh <<'EOF'
 #!/bin/sh
 xray run -c /etc/xray/config.json &
-exec openresty -g 'daemon off;'
+exec /usr/local/openresty/bin/openresty -g 'daemon off;'
 EOF
 
   cat > Dockerfile <<EOF
 FROM alpine:3.20
 RUN apk add --no-cache openresty wget ca-certificates tzdata netcat-openbsd gcompat libc6-compat
+ENV PATH="/usr/local/openresty/bin:${PATH}"
 RUN wget -qO- https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip | unzip -d /usr/local/bin/ - && chmod +x /usr/local/bin/xray
 COPY config.json /etc/xray/config.json
 COPY nginx.conf /etc/openresty/nginx.conf
@@ -349,6 +350,9 @@ EXPOSE 8080
 CMD ["/run.sh"]
 EOF
 fi
+
+# Make sure script context permissions are correct
+chmod +x run.sh
 
 # ==============================================
 # DEPLOY — Delete old revision & deploy new image
