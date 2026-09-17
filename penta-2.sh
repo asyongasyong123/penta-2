@@ -471,9 +471,37 @@ ENTRYPOINT ["/entrypoint.sh"]
 EOF
 
   # ==============================================
-  # ENVOY — ✅ FIXED STARTUP + PORT
+  # ENVOY — ✅ FIXED: 0.0.0.0 + Health Check + Longer Delay
   # ==============================================
   elif [ "$ENGINE" = "envoy" ]; then
+    cat > config.json <<'EOF'
+{
+  "log": {"loglevel": "warning"},
+  "dns": {"servers": ["223.5.5.5", "223.6.6.6"], "queryStrategy": "UseIP"},
+  "inbounds": [
+    {
+      "port": 10001,
+      "listen": "0.0.0.0",
+      "protocol": "trojan",
+      "tag": "trojan-ws",
+      "settings": {"clients": [{"password": "gcp-xray"}]},
+      "streamSettings": {"network": "ws", "wsSettings": {"path": "/trojan-ws"}, "sockopt": {"tcpFastOpen": true, "tcpNoDelay": true}},
+      "sniffing": {"enabled": false}
+    },
+    {
+      "port": 10002,
+      "listen": "0.0.0.0",
+      "protocol": "vless",
+      "tag": "vless-ws",
+      "settings": {"clients": [{"id": "a1b2c3d4-5678-40ef-98ab-cdef01234567"}], "decryption": "none"},
+      "streamSettings": {"network": "ws", "wsSettings": {"path": "/vless-ws"}, "sockopt": {"tcpFastOpen": true, "tcpNoDelay": true}},
+      "sniffing": {"enabled": false}
+    }
+  ],
+  "outbounds": [{"protocol": "freedom", "tag": "direct", "settings": {"domainStrategy": "AsIs"}}]
+}
+EOF
+
     cat > envoy.yaml <<'EOF'
 static_resources:
   listeners:
@@ -509,7 +537,7 @@ static_resources:
           - name: envoy.filters.http.router
   clusters:
   - name: trojan_ws
-    connect_timeout: 10s
+    connect_timeout: 15s
     type: STATIC
     load_assignment:
       cluster_name: trojan_ws
@@ -521,7 +549,7 @@ static_resources:
                 address: 127.0.0.1
                 port_value: 10001
   - name: vless_ws
-    connect_timeout: 10s
+    connect_timeout: 15s
     type: STATIC
     load_assignment:
       cluster_name: vless_ws
@@ -533,27 +561,38 @@ static_resources:
                 address: 127.0.0.1
                 port_value: 10002
 EOF
+
     cat > entrypoint.sh <<'EOF'
 #!/bin/sh
 set -e
 export PORT=8080
 
-# Start Xray background
+echo "Starting Xray..."
 /usr/local/bin/xray run -c /etc/xray.json &
 XRAY_PID=$!
 
-# Give Xray enough time to bind ports
-sleep 5
+# ✅ Dugayon ang delay — Cloud Run nagpaabot
+sleep 8
 
-# Verify Xray still running
+# ✅ I-check kung nagdungog na ang Xray
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  if kill -0 $XRAY_PID 2>/dev/null && ss -tln | grep -q ':1000[12]'; then
+    echo "✅ Xray ports ready — attempt $i"
+    break
+  fi
+  echo "Waiting Xray... attempt $i"
+  sleep 2
+done
+
 if ! kill -0 $XRAY_PID 2>/dev/null; then
-  echo "ERROR: Xray process failed"
+  echo "❌ ERROR: Xray exited prematurely"
   exit 1
 fi
 
-echo "Xray ready — starting Envoy on :8080"
+echo "🚀 Starting Envoy on 0.0.0.0:8080"
 exec envoy -c /etc/envoy.yaml
 EOF
+
     chmod +x entrypoint.sh
     cat > Dockerfile <<'EOF'
 FROM alpine:3.20 AS builder
