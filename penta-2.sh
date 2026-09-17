@@ -1,463 +1,336 @@
+cat <<'EOF' > deploy.sh && chmod +x deploy.sh && ./deploy.sh
 #!/bin/bash
-set -euo pipefail
+set -Eeuo pipefail
+set -o errtrace
 
-# ===================================================
-# 🚀 GCP-XHTTP — FINAL WORKING VERSION
-# ✅ Fixed Xray v25+ command syntax
-# ✅ Port readiness check before starting proxy
-# ✅ Correct OpenResty path
-# ✅ Extended startup grace period
-# ===================================================
+# ============================================================
+# OPENRESTY + VLESS/TROJAN — WS + XHTTP
+# IMONG CREDENTIALS | IMONG PATHS | DILI MO-TIMEOUT
+# ============================================================
 
-GREEN='\033[1;32m'
-RED='\033[1;31m'
-YELLOW='\033[1;33m'
-CYAN='\033[1;36m'
-NC='\033[0m'
-
-VLESS_UUID="a1b2c3d4-5678-40ef-98ab-cdef01234567"
+# === IMONG CREDENTIALS — WALAY USAB ===
 TROJAN_PASS="gcp-xray"
-PATH_TROJAN="/trojan-xhttp"
-PATH_VLESS="/vless-xhttp"
+VLESS_UUID="a1b2c3d4-5678-40ef-98ab-cdef01234567"
 
-echo -e "\n${GREEN}🔐 Credentials:${NC}"
-echo "VLESS UUID:      $VLESS_UUID"
-echo "Trojan Password: $TROJAN_PASS"
-echo "Trojan Path:     $PATH_TROJAN"
-echo "VLESS Path:      $PATH_VLESS"
+# === IMONG PATHS — WALAY USAB ===
+PATH_TR_WS="/trojan-ws"
+PATH_VL_WS="/vless-ws"
+PATH_TR_XH="/tr-xhttp"
+PATH_VL_XH="/vl-xhttp"
 
-if ! command -v jq &> /dev/null; then
-  echo -e "\n${YELLOW}⚠️ Installing jq...${NC}"
-  sudo apt update -qq && sudo apt install -y jq
-fi
+# === DEPLOY SETTINGS ===
+SERVICE_NAME="gcp-openresty-proxy"
+REGION="us-central1"
+CPU="2"
+MEMORY="4Gi"
+CONCURRENCY="500"
+MIN_INST=1
+MAX_INST=2
+TIMEOUT="3600"
 
-echo -e "\n${CYAN}🔧 Enabling APIs...${NC}"
-gcloud services enable run.googleapis.com cloudbuild.googleapis.com --quiet
+# ============================================================
+rm -rf ~/gcp-openresty-proxy && mkdir -p ~/gcp-openresty-proxy && cd ~/gcp-openresty-proxy
 
-echo -e "\n${CYAN}Select Engine:${NC}"
-echo "1) OpenResty"
-echo "2) Envoy"
-echo "3) HAProxy"
-echo "4) Caddy"
-read -p "Enter choice [1-4]: " ENGINE_CHOICE
-
-case $ENGINE_CHOICE in
-  1) ENGINE="openresty" ;;
-  2) ENGINE="envoy" ;;
-  3) ENGINE="haproxy" ;;
-  4) ENGINE="caddy" ;;
-  *) echo -e "${RED}❌ Invalid${NC}"; exit 1 ;;
-esac
-
-echo -e "\n${CYAN}Select Region:${NC}"
-echo "1) us-central1   🇺🇸 Iowa"
-echo "2) asia-southeast1 🇸🇬 Singapore"
-echo "3) asia-northeast1 🇯🇵 Tokyo"
-echo "4) us-east1       🇺🇸 South Carolina"
-read -p "Enter choice [1-4]: " REGION_CHOICE
-
-case $REGION_CHOICE in
-  1) REGION="us-central1" ;;
-  2) REGION="asia-southeast1" ;;
-  3) REGION="asia-northeast1" ;;
-  4) REGION="us-east1" ;;
-  *) echo -e "${RED}❌ Invalid${NC}"; exit 1 ;;
-esac
-
-SERVICE_NAME="gcp-xhttp-dual-${ENGINE}"
-XRAY_VERSION="25.1.1"
-
-# ==============================================
-# XRAY CONFIG
-# ==============================================
-cat > config.json <<EOF
+# ============================================================
+# XRAY CONFIG — VLESS + TROJAN | WS + XHTTP
+# ============================================================
+cat > config.json <<JSONEND
 {
-  "log": { "loglevel": "warning", "access": "none", "error": "none" },
-  "dns": { "servers": ["8.8.8.8", "8.8.4.4", "1.1.1.1"], "strategy": "UseIPv4" },
-  "policy": { "levels": { "0": { "handshake": 2, "connIdle": 3600, "bufferSize": 524288 } } },
+  "log": { "loglevel": "warning" },
+  "dns": {
+    "servers": ["8.8.8.8", "8.8.4.4"],
+    "queryStrategy": "UseIPv4"
+  },
+  "policy": {
+    "levels": {
+      "0": {
+        "handshake": 2,
+        "connIdle": 3600,
+        "bufferSize": 2097152
+      }
+    }
+  },
   "inbounds": [
     {
-      "tag": "trojan-xhttp",
       "port": 10001,
       "listen": "127.0.0.1",
       "protocol": "trojan",
-      "settings": { "clients": [{"password": "$TROJAN_PASS", "level": 0}] },
+      "tag": "trojan-ws",
+      "settings": { "clients": [{"password": "$TROJAN_PASS"}] },
       "streamSettings": {
-        "network": "xhttp",
-        "xhttpSettings": {
-          "path": "$PATH_TROJAN",
-          "mux": { "enabled": true, "concurrency": 4, "maxConnections": 4, "padding": true },
-          "no_mux": { "enabled": true, "concurrency": 1, "padding": false }
-        },
-        "sockopt": { "tcpNoDelay": true, "tcpKeepAliveInterval": 30 }
+        "network": "ws",
+        "wsSettings": { "path": "$PATH_TR_WS" },
+        "sockopt": {
+          "tcpNoDelay": true,
+          "tcpKeepAliveInterval": 15,
+          "tcpKeepAliveIdle": 30
+        }
       },
-      "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"], "routeOnly": true }
+      "sniffing": { "enabled": true, "destOverride": ["http", "tls"] }
     },
     {
-      "tag": "vless-xhttp",
       "port": 10002,
       "listen": "127.0.0.1",
       "protocol": "vless",
-      "settings": { "clients": [{"id": "$VLESS_UUID", "flow": "xtls-rprx-vision", "level": 0}], "decryption": "none" },
+      "tag": "vless-ws",
+      "settings": {
+        "clients": [{"id": "$VLESS_UUID", "level": 0}],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": { "path": "$PATH_VL_WS" },
+        "sockopt": {
+          "tcpNoDelay": true,
+          "tcpKeepAliveInterval": 15,
+          "tcpKeepAliveIdle": 30
+        }
+      },
+      "sniffing": { "enabled": true, "destOverride": ["http", "tls"] }
+    },
+    {
+      "port": 10009,
+      "listen": "127.0.0.1",
+      "protocol": "vless",
+      "tag": "vless-xhttp",
+      "settings": {
+        "clients": [{"id": "$VLESS_UUID", "level": 0}],
+        "decryption": "none"
+      },
       "streamSettings": {
         "network": "xhttp",
         "xhttpSettings": {
-          "path": "$PATH_VLESS",
-          "mux": { "enabled": true, "concurrency": 4, "maxConnections": 4, "padding": true },
-          "no_mux": { "enabled": true, "concurrency": 1, "padding": false }
+          "path": "$PATH_VL_XH",
+          "mode": "stream",
+          "noGRPC": true,
+          "heartbeat": 30000
         },
-        "sockopt": { "tcpNoDelay": true, "tcpKeepAliveInterval": 30 }
+        "sockopt": {
+          "tcpNoDelay": true,
+          "tcpKeepAliveInterval": 15,
+          "tcpKeepAliveIdle": 30
+        }
       },
-      "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"], "routeOnly": true }
+      "sniffing": { "enabled": true, "destOverride": ["http", "tls"] }
+    },
+    {
+      "port": 10010,
+      "listen": "127.0.0.1",
+      "protocol": "trojan",
+      "tag": "trojan-xhttp",
+      "settings": { "clients": [{"password": "$TROJAN_PASS"}] },
+      "streamSettings": {
+        "network": "xhttp",
+        "xhttpSettings": {
+          "path": "$PATH_TR_XH",
+          "mode": "stream",
+          "noGRPC": true,
+          "heartbeat": 30000
+        },
+        "sockopt": {
+          "tcpNoDelay": true,
+          "tcpKeepAliveInterval": 15,
+          "tcpKeepAliveIdle": 30
+        }
+      },
+      "sniffing": { "enabled": true, "destOverride": ["http", "tls"] }
     }
   ],
   "outbounds": [
-    {"protocol": "freedom", "tag": "direct", "settings": {"domainStrategy": "UseIPv4"}},
-    {"protocol": "blackhole", "tag": "blocked", "settings": {"response": {"type": "none"}}}
-  ]
+    {
+      "protocol": "freedom",
+      "tag": "direct",
+      "settings": { "domainStrategy": "UseIPv4" }
+    }
+  ],
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      {
+        "type": "field",
+        "inboundTag": ["trojan-ws", "vless-ws", "vless-xhttp", "trojan-xhttp"],
+        "outboundTag": "direct"
+      }
+    ]
+  }
 }
-EOF
+JSONEND
 
-cat > decoy.html <<'EOF'
-<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>Service Status</title></head>
-<body style="font-family:system-ui;padding:2rem;text-align:center">
-<h1>All Systems Operational</h1>
-<p>Service online — latency normal</p>
-</body></html>
-EOF
-
-# ==============================================
-# OPENRESTY — FULLY FIXED
-# ==============================================
-if [ "$ENGINE" = "openresty" ]; then
-  cat > nginx.conf <<'EOF'
+# ============================================================
+# NGINX CONFIG — KEEPALIVE + NO TIMEOUT
+# ============================================================
+cat > nginx.conf <<'CONFEND'
 worker_processes auto;
-worker_rlimit_nofile 10240;
-events { worker_connections 4096; multi_accept on; use epoll; }
+worker_rlimit_nofile 16384;
+
+events {
+    worker_connections 4096;
+    use epoll;
+    multi_accept on;
+}
+
 http {
-  sendfile on; tcp_nodelay on;
-  keepalive_timeout 3600; keepalive_requests 100000;
-  client_max_body_size 0; proxy_max_temp_file_size 0;
-  proxy_connect_timeout 10s; proxy_send_timeout 3600s; proxy_read_timeout 3600s;
-  proxy_buffering off; proxy_request_buffering off; proxy_http_version 1.1;
-  server {
-    listen 8080;
-    root /usr/share/nginx/html;
-    location /health { return 200 "OK\n"; }
-    location /trojan-xhttp {
-      proxy_pass http://127.0.0.1:10001;
-      proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr;
-      proxy_read_timeout 3600s; proxy_send_timeout 3600s;
+    sendfile on;
+    tcp_nodelay on;
+    keepalive_timeout 3600s;
+    keepalive_requests 100000;
+
+    # UPSTREAM + KEEPALIVE
+    upstream tr_ws  { server 127.0.0.1:10001; keepalive 64; keepalive_timeout 3600s; }
+    upstream vl_ws  { server 127.0.0.1:10002; keepalive 64; keepalive_timeout 3600s; }
+    upstream vl_xh  { server 127.0.0.1:10009; keepalive 64; keepalive_timeout 3600s; }
+    upstream tr_xh  { server 127.0.0.1:10010; keepalive 64; keepalive_timeout 3600s; }
+
+    map $http_upgrade $connection_upgrade {
+        default upgrade;
+        '' '';
     }
-    location /vless-xhttp {
-      proxy_pass http://127.0.0.1:10002;
-      proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr;
-      proxy_read_timeout 3600s; proxy_send_timeout 3600s;
+
+    server {
+        listen 8080;
+
+        location = /health {
+            access_log off;
+            return 200 "OK\n";
+        }
+
+        # TROJAN-WS
+        location ^~ /trojan-ws {
+            proxy_pass http://tr_ws;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+            proxy_set_header Host $host;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+            proxy_buffering off;
+            proxy_request_buffering off;
+        }
+
+        # VLESS-WS
+        location ^~ /vless-ws {
+            proxy_pass http://vl_ws;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+            proxy_set_header Host $host;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+            proxy_buffering off;
+            proxy_request_buffering off;
+        }
+
+        # VLESS-XHTTP
+        location ^~ /vl-xhttp {
+            proxy_pass http://vl_xh;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header Host $host;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+            proxy_connect_timeout 15s;
+            proxy_buffering off;
+            proxy_request_buffering off;
+        }
+
+        # TROJAN-XHTTP
+        location ^~ /tr-xhttp {
+            proxy_pass http://tr_xh;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header Host $host;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+            proxy_connect_timeout 15s;
+            proxy_buffering off;
+            proxy_request_buffering off;
+        }
+
+        # Decoy Page
+        location / {
+            return 200 '<html><body style="font-family:system-ui;text-align:center;padding:3em;"><h1>✅ GCP-Proxy Active</h1></body></html>';
+        }
     }
-    location / { try_files $uri /decoy.html; }
-  }
 }
-EOF
+CONFEND
 
-  cat > run.sh <<'EOF'
-#!/bin/sh
-set -e
+# ============================================================
+# DOCKERFILE — QWIKLABS-SAFE
+# ============================================================
+cat > Dockerfile <<'DOCKEND'
+FROM alpine:3.20 AS builder
+RUN apk add --no-cache curl unzip ca-certificates
+RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip && \
+    unzip -q xray.zip xray && \
+    chmod +x xray
 
-# Start Xray in background — v25+ uses positional argument
-xray -c /etc/xray/config.json &
-XRAY_PID=$!
-
-# Wait for Xray ports to be ready — up to 30s
-echo "⏳ Waiting for Xray ports..."
-for i in 1 2 3 4 5 6 7 8 9 10 15 20 25 30; do
-  if nc -z 127.0.0.1 10001 && nc -z 127.0.0.1 10002; then
-    echo "✅ Xray ready on ports 10001 & 10002"
-    break
-  fi
-  sleep 1
-done
-
-# Start OpenResty in foreground — correct path
-exec /usr/local/openresty/bin/openresty -g 'daemon off;'
-EOF
-
-  cat > Dockerfile <<EOF
-FROM alpine:3.20
-
-# Dependencies
-RUN apk add --no-cache \
-  openresty \
-  wget \
-  ca-certificates \
-  tzdata \
-  netcat-openbsd \
-  gcompat \
-  libc6-compat
-
-# Fix OpenResty PATH
-ENV PATH="/usr/local/openresty/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-
-# Download Xray v25
-RUN wget -qO /tmp/xray.zip https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip && \
-    unzip /tmp/xray.zip -d /usr/local/bin/ && \
-    rm /tmp/xray.zip && \
-    chmod +x /usr/local/bin/xray
-
-# Copy configs
+FROM openresty/openresty:1.21.4.1-0-alpine
+RUN mkdir -p /usr/local/bin
+COPY --from=builder /xray /usr/local/bin/xray
 COPY config.json /etc/xray/config.json
-COPY nginx.conf /etc/openresty/nginx.conf
-COPY decoy.html /usr/share/nginx/html/decoy.html
-COPY run.sh /run.sh
+COPY nginx.conf /etc/nginx/nginx.conf
 
-RUN chmod +x /run.sh
 EXPOSE 8080
 
-CMD ["/run.sh"]
-EOF
+CMD ["/bin/sh", "-c", \
+    "xray run -c /etc/xray/config.json & \
+    exec /usr/local/openresty/bin/openresty -g 'daemon off;'"]
+DOCKEND
 
-# ==============================================
-# ENVOY — FIXED
-# ==============================================
-elif [ "$ENGINE" = "envoy" ]; then
-  cat > envoy.yaml <<'EOF'
-static_resources:
-  listeners:
-  - name: listener_0
-    address: { socket_address: { address: 0.0.0.0, port_value: 8080 } }
-    filter_chains:
-    - filters:
-      - name: envoy.filters.network.http_connection_manager
-        typed_config:
-          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
-          stat_prefix: ingress_http
-          route_config:
-            name: local_route
-            virtual_hosts:
-            - name: local_service
-              domains: ["*"]
-              routes:
-              - match: { path: "/health" }
-                direct_response: { status: 200, body: { inline_string: "OK\n" } }
-              - match: { prefix: "/trojan-xhttp" }
-                route: { cluster: trojan_xhttp, timeout: 3600s }
-              - match: { prefix: "/vless-xhttp" }
-                route: { cluster: vless_xhttp, timeout: 3600s }
-              - match: { prefix: "/" }
-                direct_response: { status: 200, body: { filename: "/etc/decoy.html" } }
-          http_filters:
-          - name: envoy.filters.http.router
-            typed_config: {}
-  clusters:
-  - name: trojan_xhttp
-    connect_timeout: 10s
-    type: STATIC
-    lb_policy: ROUND_ROBIN
-    load_assignment:
-      cluster_name: trojan_xhttp
-      endpoints:
-      - lb_endpoints:
-        - endpoint: { address: { socket_address: { address: 127.0.0.1, port_value: 10001 } } }
-  - name: vless_xhttp
-    connect_timeout: 10s
-    type: STATIC
-    lb_policy: ROUND_ROBIN
-    load_assignment:
-      cluster_name: vless_xhttp
-      endpoints:
-      - lb_endpoints:
-        - endpoint: { address: { socket_address: { address: 127.0.0.1, port_value: 10002 } } }
-EOF
-
-  cat > run.sh <<'EOF'
-#!/bin/sh
-set -e
-xray -c /etc/xray.json &
-for i in 1 2 3 4 5 6 7 8 9 10 15 20 25 30; do
-  if nc -z 127.0.0.1 10001 && nc -z 127.0.0.1 10002; then
-    echo "✅ Xray ready"
-    break
-  fi
-  sleep 1
-done
-exec envoy -c /etc/envoy/envoy.yaml
-EOF
-
-  cat > Dockerfile <<EOF
-FROM alpine:3.20
-RUN apk add --no-cache wget ca-certificates tzdata netcat-openbsd gcompat libc6-compat
-RUN wget -qO /tmp/xray.zip https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip && \
-    unzip /tmp/xray.zip -d /usr/local/bin/ && rm /tmp/xray.zip && chmod +x /usr/local/bin/xray
-FROM envoyproxy/envoy:v1.31.10
-COPY --from=0 /usr/local/bin/xray /usr/local/bin/
-COPY config.json /etc/xray.json
-COPY envoy.yaml /etc/envoy/envoy.yaml
-COPY decoy.html /etc/decoy.html
-COPY run.sh /run.sh
-RUN chmod +x /run.sh && apt-get update && apt-get install -y netcat-openbsd && rm -rf /var/lib/apt/lists/*
-EXPOSE 8080
-CMD ["/run.sh"]
-EOF
-
-# ==============================================
-# HAPROXY — FIXED
-# ==============================================
-elif [ "$ENGINE" = "haproxy" ]; then
-  cat > haproxy.cfg <<'EOF'
-global
-  log stdout format raw local0
-  maxconn 10000
-defaults
-  log global
-  mode http
-  timeout connect 10s
-  timeout client 3600s
-  timeout server 3600s
-frontend main
-  bind *:8080
-  acl is_health path /health
-  acl is_trojan path_beg /trojan-xhttp
-  acl is_vless path_beg /vless-xhttp
-  use_backend health_backend if is_health
-  use_backend trojan_backend if is_trojan
-  use_backend vless_backend if is_vless
-  default_backend decoy_backend
-backend health_backend
-  http-request return status 200 content-type text/plain string "OK"
-backend trojan_backend
-  server s1 127.0.0.1:10001
-backend vless_backend
-  server s1 127.0.0.1:10002
-backend decoy_backend
-  errorfile 200 /etc/decoy.http
-EOF
-  printf "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n%s" "$(cat decoy.html)" > decoy.http
-
-  cat > run.sh <<'EOF'
-#!/bin/sh
-set -e
-xray -c /etc/xray/config.json &
-for i in 1 2 3 4 5 6 7 8 9 10 15 20 25 30; do
-  if nc -z 127.0.0.1 10001 && nc -z 127.0.0.1 10002; then
-    echo "✅ Xray ready"
-    break
-  fi
-  sleep 1
-done
-exec haproxy -f /etc/haproxy/haproxy.cfg
-EOF
-
-  cat > Dockerfile <<EOF
-FROM alpine:3.20
-RUN apk add --no-cache haproxy wget ca-certificates tzdata netcat-openbsd gcompat libc6-compat
-RUN wget -qO /tmp/xray.zip https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip && \
-    unzip /tmp/xray.zip -d /usr/local/bin/ && rm /tmp/xray.zip && chmod +x /usr/local/bin/xray
-COPY config.json /etc/xray/config.json
-COPY haproxy.cfg /etc/haproxy/haproxy.cfg
-COPY decoy.http /etc/decoy.http
-COPY run.sh /run.sh
-RUN chmod +x /run.sh
-EXPOSE 8080
-CMD ["/run.sh"]
-EOF
-
-# ==============================================
-# CADDY — FIXED
-# ==============================================
-elif [ "$ENGINE" = "caddy" ]; then
-  cat > Caddyfile <<'EOF'
-{
-  admin off
-  http_port 8080
-  servers {
-    strict_sni off
-    max_header_size 1MB
-  }
-}
-:8080 {
-  handle /health { respond "OK" 200 }
-  handle /trojan-xhttp* {
-    reverse_proxy 127.0.0.1:10001 {
-      header_up Host {host}
-      header_up X-Real-IP {remote_host}
-      flush_interval -1
-    }
-  }
-  handle /vless-xhttp* {
-    reverse_proxy 127.0.0.1:10002 {
-      header_up Host {host}
-      header_up X-Real-IP {remote_host}
-      flush_interval -1
-    }
-  }
-  handle {
-    header Content-Type text/html
-    respond `<!DOCTYPE html><html><head><title>Service Status</title></head><body style="font-family:system-ui;padding:2rem;text-align:center"><h1>All Systems Operational</h1><p>Service online — latency normal</p></body></html>`
-  }
-}
-EOF
-
-  cat > run.sh <<'EOF'
-#!/bin/sh
-set -e
-xray -c /etc/xray/config.json &
-for i in 1 2 3 4 5 6 7 8 9 10 15 20 25 30; do
-  if nc -z 127.0.0.1 10001 && nc -z 127.0.0.1 10002; then
-    echo "✅ Xray ready"
-    break
-  fi
-  sleep 1
-done
-exec caddy run --config /etc/Caddyfile
-EOF
-
-  cat > Dockerfile <<EOF
-FROM alpine:3.20
-RUN apk add --no-cache caddy wget ca-certificates tzdata netcat-openbsd gcompat libc6-compat
-RUN wget -qO /tmp/xray.zip https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip && \
-    unzip /tmp/xray.zip -d /usr/local/bin/ && rm /tmp/xray.zip && chmod +x /usr/local/bin/xray
-COPY config.json /etc/xray/config.json
-COPY Caddyfile /etc/Caddyfile
-COPY run.sh /run.sh
-RUN chmod +x /run.sh
-EXPOSE 8080
-CMD ["/run.sh"]
-EOF
-fi
-
-# ==============================================
+# ============================================================
 # DEPLOY
-# ==============================================
-echo -e "\n${CYAN}☁️ Building image...${NC}"
-gcloud builds submit --tag gcr.io/$(gcloud config get project)/$SERVICE_NAME --quiet
+# ============================================================
+gcloud services enable run.googleapis.com cloudbuild.googleapis.com --quiet 2>/dev/null || true
 
-echo -e "\n${CYAN}🚀 Deploying — $REGION...${NC}"
-
-gcloud run services delete $SERVICE_NAME --region=$REGION --quiet 2>/dev/null || true
-
-gcloud run deploy $SERVICE_NAME \
-  --image gcr.io/$(gcloud config get project)/$SERVICE_NAME \
+echo "🚀 Deploying $SERVICE_NAME..."
+gcloud run deploy "$SERVICE_NAME" \
+  --source . \
+  --region "$REGION" \
   --platform managed \
-  --region $REGION \
+  --allow-unauthenticated \
   --port 8080 \
-  --memory 2Gi \
-  --cpu 1 \
-  --min-instances 0 \
-  --max-instances 4 \
-  --concurrency 80 \
-  --timeout 300 \
-  --allow-unauthenticated
+  --cpu "$CPU" \
+  --memory "$MEMORY" \
+  --concurrency "$CONCURRENCY" \
+  --min-instances "$MIN_INST" \
+  --max-instances "$MAX_INST" \
+  --timeout "${TIMEOUT}s" \
+  --execution-environment=gen2 \
+  --no-cpu-throttling \
+  --cpu-boost \
+  --session-affinity
 
-SERVICE_URL=$(gcloud run services describe $SERVICE_NAME --region $REGION --format 'value(status.url)')
-DOMAIN=$(echo "$SERVICE_URL" | sed 's|https://||')
+DOMAIN=$(gcloud run services describe "$SERVICE_NAME" --region "$REGION" --format='value(status.url)')
+DOMAIN_CLEAN=${DOMAIN#https://}
 
-echo -e "\n${GREEN}✅ DEPLOYMENT SUCCESS${NC}"
-echo "Service URL: $SERVICE_URL"
-
-echo -e "\n${YELLOW}─── TROJAN ───${NC}"
-echo "Mux ON  → trojan://$TROJAN_PASS@$DOMAIN:443?security=tls&sni=$DOMAIN&type=xhttp&path=$PATH_TROJAN&mux=1#Trojan-Mux"
-echo "Mux OFF → trojan://$TROJAN_PASS@$DOMAIN:443?security=tls&sni=$DOMAIN&type=xhttp&path=$PATH_TROJAN#Trojan-NoMux"
-
-echo -e "\n${YELLOW}─── VLESS ───${NC}"
-echo "Mux ON  → vless://$VLESS_UUID@$DOMAIN:443?security=tls&sni=$DOMAIN&type=xhttp&path=$PATH_VLESS&mux=1&flow=xtls-rprx-vision#VLESS-Mux"
-echo "Mux OFF → vless://$VLESS_UUID@$DOMAIN:443?security=tls&sni=$DOMAIN&type=xhttp&path=$PATH_VLESS&flow=xtls-rprx-vision#VLESS-NoMux"
+echo
+echo "============================================================"
+echo "✅ DEPLOYMENT SUCCESS ✅"
+echo "============================================================"
+echo "Domain:    $DOMAIN_CLEAN"
+echo "Port:      443"
+echo "TLS/SNI:   ON"
+echo
+echo "🥇 VLESS-XHTTP (RECOMMENDED):"
+echo "Network:   XHTTP"
+echo "Path:      /vl-xhttp"
+echo "Mode:      stream"
+echo "UUID:      $VLESS_UUID"
+echo
+echo "🥈 TROJAN-XHTTP:"
+echo "Network:   XHTTP"
+echo "Path:      /tr-xhttp"
+echo "Mode:      stream"
+echo "Password:  $TROJAN_PASS"
+echo
+echo "🟢 VLESS-WS:"
+echo "Network:   WebSocket"
+echo "Path:      /vless-ws"
+echo "UUID:      $VLESS_UUID"
+echo
+echo "🟢 TROJAN-WS:"
+echo "Network:   WebSocket"
+echo "Path:      /trojan-ws"
+echo "Password:  $TROJAN_PASS"
+echo "============================================================"
+EOF
