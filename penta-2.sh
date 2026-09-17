@@ -1,11 +1,14 @@
 #!/bin/bash
 set -euo pipefail
+
 # =========================================
 # 🚀 GCP-XRAY MULTI-ENGINE DEPLOYER + SING-BOX
 # ✅ ENGINES: OPENRESTY, ENVOY, HAPROXY, CADDY, SING-BOX
+# ✅ WS + XHTTP SUPPORT FOR ALL ENGINES
 # ✅ SOLID HOST TUNING | ANTI-DDOS | LOG CLEANER | SUPERVISORD
 # ✅ Custom Decoy HTML — No Sniffing
 # =========================================
+
 GREEN='\033[1;32m'
 RED='\033[1;31m'
 YELLOW='\033[1;33m'
@@ -55,8 +58,8 @@ net.ipv4.icmp_echo_ignore_all = 1
 net.ipv4.icmp_echo_ignore_broadcasts = 1
 net.ipv4.icmp_ignore_bogus_error_responses = 1
 EOF
-  sudo sysctl -p /etc/sysctl.d/99-solid-host.conf >/dev/null 2>&1
-  # File Descriptors
+  sudo sysctl -p /etc/sysctl.d/99-solid-host.conf >/dev/null 2>&1 || true
+  
   sudo tee /etc/security/limits.d/99-proxy-limits.conf > /dev/null <<'EOF'
 * soft nofile 65536
 * hard nofile 65536
@@ -72,11 +75,9 @@ setup_log_cleaner() {
   echo -e "${CYAN}🧹 Setting up log cleaner...${NC}"
   sudo tee /etc/cron.daily/log-cleaner > /dev/null <<'EOF'
 #!/bin/bash
-# Keep logs only for 3 days
 find /var/log -type f -name "*.log" -mtime +3 -delete
 find /var/log -type f -name "*.gz" -mtime +3 -delete
 find /var/log -type f -name "*.old" -mtime +3 -delete
-# Truncate large active logs
 for log in /var/log/syslog /var/log/messages /var/log/nginx/*.log /var/log/xray/*.log /var/log/sing-box/*.log; do
   if [ -f "$log" ]; then : > "$log"; fi
 done
@@ -94,7 +95,7 @@ install_supervisord() {
 }
 
 # ==============================================
-# LIST SERVICES — FIXED
+# LIST SERVICES
 # ==============================================
 list_deployed_services() {
   echo -e "\n======================================"
@@ -209,56 +210,9 @@ select_region() {
 }
 
 # ==============================================
-# 🎨 DECOY HTML PAGE — EXACTLY AS PROVIDED
-# ==============================================
-generate_decoy_html() {
-  cat <<'DECOYHTML'
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>System Status | Cloud Gateway</title>
-    <style>
-        :root { --bg: #0b0f19; --card: #111827; --border: #1f2937; --text: #9ca3af; --white: #f9fafb; --green: #10b981; }
-        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-        body { background: var(--bg); color: var(--text); display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
-        .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 32px; max-width: 440px; width: 100%; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5); }
-        .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
-        .title { color: var(--white); font-size: 18px; font-weight: 600; }
-        .badge { display: inline-flex; align-items: center; gap: 6px; background: rgba(16, 185, 129, 0.1); color: var(--green); padding: 4px 10px; border-radius: 9999px; font-size: 12px; font-weight: 500; }
-        .dot { width: 8px; height: 8px; background: var(--green); border-radius: 50%; animation: pulse 2s infinite; }
-        .metrics { display: grid; gap: 12px; margin-bottom: 24px; }
-        .metric-item { display: flex; justify-content: space-between; font-size: 14px; padding: 8px 0; border-bottom: 1px dashed var(--border); }
-        .metric-item span:last-child { color: var(--white); font-weight: 500; }
-        .footer { font-size: 12px; text-align: center; color: #6b7280; }
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <div class="header">
-            <div class="title">Application Gateway</div>
-            <div class="badge"><span class="dot"></span> Operational</div>
-        </div>
-        <div class="metrics">
-            <div class="metric-item"><span>HTTP/2 Proxy Ingress</span><span>Active</span></div>
-            <div class="metric-item"><span>Global Load Balancer</span><span>Normal</span></div>
-            <div class="metric-item"><span>Avg. Latency</span><span>&lt; 15ms</span></div>
-            <div class="metric-item"><span>System Uptime</span><span>99.99%</span></div>
-        </div>
-        <div class="footer">Cloud Infrastructure &copy; 2026. All Systems Nominal.</div>
-    </div>
-</body>
-</html>
-DECOYHTML
-}
-
-# ==============================================
 # DEPLOYMENT FUNCTION
 # ==============================================
 deploy_new_service() {
-  # Apply system optimizations once
   sysctl_optimize
   setup_log_cleaner
   install_supervisord
@@ -271,9 +225,6 @@ deploy_new_service() {
   fi
   gcloud services enable run.googleapis.com cloudbuild.googleapis.com --project="$PROJECT_ID" --quiet
 
-  # ==============================================
-  # 🎯 PROXY ENGINE SELECTOR — ADDED SING-BOX
-  # ==============================================
   echo -e "\n${CYAN}=========================================${NC}"
   echo -e "${GREEN}          CHOOSE PROXY ENGINE${NC}"
   echo -e "${CYAN}=========================================${NC}"
@@ -294,7 +245,6 @@ deploy_new_service() {
       esac
   done
 
-  # 🏷️ GENERATE SERVICE NAME WITH ENGINE INCLUDED
   RAND=$(openssl rand -hex 3)
   CLOUD_RUN_SERVICE_NAME="gcp-xray-${ENGINE}-$RAND"
 
@@ -400,8 +350,49 @@ deploy_new_service() {
   BUILD_DIR=$(mktemp -d)
   trap 'rm -rf "$BUILD_DIR"' EXIT
   cd "$BUILD_DIR" || exit 1
-  # Generate decoy HTML
-  DECOY_HTML=$(generate_decoy_html)
+
+  # Create index.html Decoy Page cleanly
+  cat > index.html <<'EOF'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>System Status | Cloud Gateway</title>
+    <style>
+        :root { --bg: #0b0f19; --card: #111827; --border: #1f2937; --text: #9ca3af; --white: #f9fafb; --green: #10b981; }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        body { background: var(--bg); color: var(--text); display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
+        .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 32px; max-width: 440px; width: 100%; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5); }
+        .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+        .title { color: var(--white); font-size: 18px; font-weight: 600; }
+        .badge { display: inline-flex; align-items: center; gap: 6px; background: rgba(16, 185, 129, 0.1); color: var(--green); padding: 4px 10px; border-radius: 9999px; font-size: 12px; font-weight: 500; }
+        .dot { width: 8px; height: 8px; background: var(--green); border-radius: 50%; animation: pulse 2s infinite; }
+        .metrics { display: grid; gap: 12px; margin-bottom: 24px; }
+        .metric-item { display: flex; justify-content: space-between; font-size: 14px; padding: 8px 0; border-bottom: 1px dashed var(--border); }
+        .metric-item span:last-child { color: var(--white); font-weight: 500; }
+        .footer { font-size: 12px; text-align: center; color: #6b7280; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="header">
+            <div class="title">Application Gateway</div>
+            <div class="badge"><span class="dot"></span> Operational</div>
+        </div>
+        <div class="metrics">
+            <div class="metric-item"><span>HTTP/2 Proxy Ingress</span><span>Active</span></div>
+            <div class="metric-item"><span>Global Load Balancer</span><span>Normal</span></div>
+            <div class="metric-item"><span>Avg. Latency</span><span>&lt; 15ms</span></div>
+            <div class="metric-item"><span>System Uptime</span><span>99.99%</span></div>
+        </div>
+        <div class="footer">Cloud Infrastructure &copy; 2026. All Systems Nominal.</div>
+    </div>
+</body>
+</html>
+EOF
+
   clear
   echo ""
   echo -e "${CYAN}=========================================${NC}"
@@ -416,76 +407,66 @@ deploy_new_service() {
   echo ""
 
   # ==============================================
-  # XRAY CONFIG — Sniffing OFF, Solid Tuning
+  # XRAY CONFIG — WS + XHTTP Support
   # ==============================================
   cat > config.json <<'EOF'
 {
-  "log": { "loglevel": "warning" },
+  "log": {"loglevel": "warning"},
   "dns": {
-    "servers": ["8.8.8.8", "8.8.4.4"],
-    "strategy": "UseIPv4"
-  },
-  "policy": {
-    "levels": {
-      "0": {
-        "handshake": 4,
-        "connIdle": 7200,
-        "bufferSize": 1048576
-      }
-    }
+    "servers": ["223.5.5.5", "223.6.6.6"],
+    "queryStrategy": "UseIP"
   },
   "inbounds": [
     {
-      "tag": "trojan-ws",
-      "port": 10001,
-      "listen": "127.0.0.1",
-      "protocol": "trojan",
-      "settings": { "clients": [{"password": "gcp-xray", "level": 0}] },
-      "sniffing": { "enabled": false },
+      "port": 10001, "listen": "::", "protocol": "trojan", "tag": "trojan-ws",
+      "settings": {"clients": [{"password": "gcp-xray"}]},
       "streamSettings": {
-        "network": "ws",
-        "wsSettings": { "path": "/trojan-ws" },
-        "sockopt": { 
-          "tcpNoDelay": true, 
-          "tcpFastOpen": true, 
-          "tcpKeepAliveIdle": 300, 
-          "tcpKeepAliveInterval": 30,
-          "mark": 0
-        }
-      }
+        "network": "ws", "wsSettings": {"path": "/trojan-ws"},
+        "sockopt": {"tcpFastOpen": true, "tcpNoDelay": true, "tcpKeepAliveInterval": 30, "tcpKeepAliveIdle": 300}
+      },
+      "sniffing": {"enabled": false}
     },
     {
-      "tag": "vless-ws",
-      "port": 10002,
-      "listen": "127.0.0.1",
-      "protocol": "vless",
-      "settings": { "clients": [{"id": "a1b2c3d4-5678-40ef-98ab-cdef01234567", "level": 0}], "decryption": "none" },
-      "sniffing": { "enabled": false },
+      "port": 10002, "listen": "::", "protocol": "vless", "tag": "vless-ws",
+      "settings": {"clients": [{"id": "a1b2c3d4-5678-40ef-98ab-cdef01234567"}], "decryption": "none"},
       "streamSettings": {
-        "network": "ws",
-        "wsSettings": { "path": "/vless-ws" },
-        "sockopt": { 
-          "tcpNoDelay": true, 
-          "tcpFastOpen": true, 
-          "tcpKeepAliveIdle": 300, 
-          "tcpKeepAliveInterval": 30 
-        }
-      }
+        "network": "ws", "wsSettings": {"path": "/vless-ws"},
+        "sockopt": {"tcpFastOpen": true, "tcpNoDelay": true, "tcpKeepAliveInterval": 30, "tcpKeepAliveIdle": 300}
+      },
+      "sniffing": {"enabled": false}
+    },
+    {
+      "port": 10010, "listen": "::", "protocol": "trojan", "tag": "trojan-xh",
+      "settings": {"clients": [{"password": "gcp-xray"}]},
+      "streamSettings": {
+        "network": "xhttp", "xhttpSettings": {"path": "/trojan-xhttp", "mode": "auto"},
+        "sockopt": {"tcpFastOpen": true, "tcpNoDelay": true, "tcpKeepAliveInterval": 30, "tcpKeepAliveIdle": 300}
+      },
+      "sniffing": {"enabled": false}
+    },
+    {
+      "port": 10009, "listen": "::", "protocol": "vless", "tag": "vless-xh",
+      "settings": {"clients": [{"id": "a1b2c3d4-5678-40ef-98ab-cdef01234567"}], "decryption": "none"},
+      "streamSettings": {
+        "network": "xhttp", "xhttpSettings": {"path": "/vless-http", "mode": "auto"},
+        "sockopt": {"tcpFastOpen": true, "tcpNoDelay": true, "tcpKeepAliveInterval": 30, "tcpKeepAliveIdle": 300}
+      },
+      "sniffing": {"enabled": false}
     }
   ],
   "outbounds": [
-    { "protocol": "freedom", "tag": "direct", "settings": { "domainStrategy": "UseIPv4" } }
+    { "protocol": "freedom", "tag": "direct", "settings": {"domainStrategy": "AsIs"} }
   ]
 }
 EOF
 
   if [ "$ENGINE" = "openresty" ]; then
-    cat > nginx.conf <<EOF
+    cat > nginx.conf <<'EOF'
 worker_processes auto;
 worker_rlimit_nofile 65536;
 events { worker_connections 16384; use epoll; multi_accept on; }
 http {
-  include mime.types;
+  include /usr/local/openresty/nginx/conf/mime.types;
   default_type application/octet-stream;
   sendfile on; tcp_nodelay on; tcp_nopush on;
   keepalive_timeout 7200; keepalive_requests 200000;
@@ -493,74 +474,42 @@ http {
   proxy_buffering off; proxy_request_buffering off;
   proxy_http_version 1.1; proxy_connect_timeout 10s;
   proxy_send_timeout 7200s; proxy_read_timeout 7200s;
-  proxy_cache off;
+
   server {
-    listen 8080;
+    listen 8080 default_server reuseport;
     server_name _;
-    
-    # Anti-DDoS / Rate Limiting
-    limit_req_zone \$binary_remote_addr zone=req_limit:10m rate=30r/s;
-    limit_conn_zone \$binary_remote_addr zone=conn_limit:10m;
+
     location /health { return 200 "OK\n"; add_header Content-Type text/plain; }
     location / {
-      default_type text/html;
-      return 200 '$(generate_decoy_html | sed -e ":a" -e "N" -e '/$/!ba' -e "s/'/\\\\'/g" -e "s/\n//g")';
+      root /usr/local/openresty/nginx/html;
+      index index.html;
     }
     location /trojan-ws {
-      limit_req zone=req_limit burst=60 nodelay;
-      limit_conn conn_limit 100;
       proxy_pass http://127.0.0.1:10001;
-      proxy_set_header Upgrade \$http_upgrade; proxy_set_header Connection "upgrade";
-      proxy_set_header Host \$host; proxy_set_header X-Real-IP \$remote_addr;
-      proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-      proxy_read_timeout 7200s; proxy_send_timeout 7200s;
-      proxy_socket_keepalive on;
+      proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";
+      proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr;
     }
     location /vless-ws {
-      limit_req zone=req_limit burst=60 nodelay;
-      limit_conn conn_limit 100;
       proxy_pass http://127.0.0.1:10002;
-      proxy_set_header Upgrade \$http_upgrade; proxy_set_header Connection "upgrade";
-      proxy_set_header Host \$host; proxy_set_header X-Real-IP \$remote_addr;
-      proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-      proxy_read_timeout 7200s; proxy_send_timeout 7200s;
-      proxy_socket_keepalive on;
+      proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";
+      proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr;
+    }
+    location /trojan-xhttp {
+      proxy_pass http://127.0.0.1:10010;
+      proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr;
+    }
+    location /vless-http {
+      proxy_pass http://127.0.0.1:10009;
+      proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr;
     }
   }
 }
 EOF
     cat > entrypoint.sh <<'EOF'
 #!/bin/sh
-# Start Xray
 /usr/local/bin/xray run -c /etc/xray.json &
-XRAY_PID=$!
-# Start supervisord
-if [ -d "/etc/supervisor" ]; then
-  cat > /etc/supervisor/conf.d/proxy-services.conf <<SUPCONF
-[program:xray]
-command=/usr/local/bin/xray run -c /etc/xray.json
-autostart=true
-autorestart=true
-startretries=999
-stdout_logfile=/dev/stdout
-stderr_logfile=/dev/stderr
-stdout_logfile_maxbytes=0
-stderr_logfile_maxbytes=0
-[program:openresty]
-command=/usr/local/openresty/bin/openresty -g 'daemon off;'
-autostart=true
-autorestart=true
-startretries=999
-stdout_logfile=/dev/stdout
-stderr_logfile=/dev/stderr
-stdout_logfile_maxbytes=0
-stderr_logfile_maxbytes=0
-SUPCONF
-  exec /usr/bin/supervisord -n
-else
-  sleep 2
-  exec /usr/local/openresty/bin/openresty -g 'daemon off;'
-fi
+sleep 2
+exec /usr/local/openresty/bin/openresty -g 'daemon off;'
 EOF
     chmod +x entrypoint.sh
     cat > Dockerfile <<'EOF'
@@ -568,10 +517,10 @@ FROM alpine:3.20 AS builder
 RUN apk add --no-cache curl unzip ca-certificates
 RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip && unzip -q xray.zip xray && chmod +x xray
 FROM openresty/openresty:alpine-fat
-RUN apt-get update && apt-get install -y -qq supervisor && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /xray /usr/local/bin/xray
 COPY config.json /etc/xray.json
 COPY nginx.conf /usr/local/openresty/nginx/conf/nginx.conf
+COPY index.html /usr/local/openresty/nginx/html/index.html
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /usr/local/bin/xray /entrypoint.sh
 EXPOSE 8080
@@ -579,16 +528,12 @@ ENTRYPOINT ["/entrypoint.sh"]
 EOF
 
   elif [ "$ENGINE" = "envoy" ]; then
-    DECOY_HTML_ESCAPED=$(generate_decoy_html | sed -e ':a' -e 'N' -e '$!ba' -e 's/"/\\"/g' -e 's/\n/\\n/g')
-    cat > envoy.yaml <<EOF
+    cat > envoy.yaml <<'EOF'
 static_resources:
   listeners:
   - name: listener_0
     address:
-      socket_address:
-        address: 0.0.0.0
-        port_value: 8080
-    per_connection_buffer_limit_bytes: 1048576
+      socket_address: { address: 0.0.0.0, port_value: 8080 }
     filter_chains:
     - filters:
       - name: envoy.filters.network.http_connection_manager
@@ -596,7 +541,6 @@ static_resources:
           "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
           stat_prefix: ingress_http
           codec_type: AUTO
-          idle_timeout: 7200s
           route_config:
             name: local_route
             virtual_hosts:
@@ -606,42 +550,48 @@ static_resources:
               - match: { prefix: "/health" }
                 direct_response: { status: 200, body: { inline_string: "OK\n" } }
               - match: { prefix: "/trojan-ws" }
-                route: { cluster: trojan_cluster, timeout: 7200s, idle_timeout: 7200s, upgrade_configs: [{ upgrade_type: "websocket" }] }
+                route: { cluster: trojan_ws_cluster, timeout: 3600s, upgrade_configs: [{ upgrade_type: "websocket" }] }
               - match: { prefix: "/vless-ws" }
-                route: { cluster: vless_cluster, timeout: 7200s, idle_timeout: 7200s, upgrade_configs: [{ upgrade_type: "websocket" }] }
+                route: { cluster: vless_ws_cluster, timeout: 3600s, upgrade_configs: [{ upgrade_type: "websocket" }] }
+              - match: { prefix: "/trojan-xhttp" }
+                route: { cluster: trojan_xh_cluster, timeout: 3600s }
+              - match: { prefix: "/vless-http" }
+                route: { cluster: vless_xh_cluster, timeout: 3600s }
               - match: { prefix: "/" }
-                direct_response: { status: 200, body: { inline_string: "$DECOY_HTML_ESCAPED" } }
+                direct_response: { status: 200, body: { inline_string: "Application Gateway Operational" } }
           http_filters:
           - name: envoy.filters.http.router
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
   clusters:
-  - name: trojan_cluster
+  - name: trojan_ws_cluster
     connect_timeout: 10s
     type: STATIC
     lb_policy: ROUND_ROBIN
-    upstream_connection_options:
-      - tcp_keepalive: {}
     load_assignment:
-      cluster_name: trojan_cluster
-      endpoints:
-      - lb_endpoints:
-        - endpoint:
-            address:
-              socket_address: { address: 127.0.0.1, port_value: 10001 }
-  - name: vless_cluster
+      cluster_name: trojan_ws_cluster
+      endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: 127.0.0.1, port_value: 10001 } } } }] }]
+  - name: vless_ws_cluster
     connect_timeout: 10s
     type: STATIC
     lb_policy: ROUND_ROBIN
-    upstream_connection_options:
-      - tcp_keepalive: {}
     load_assignment:
-      cluster_name: vless_cluster
-      endpoints:
-      - lb_endpoints:
-        - endpoint:
-            address:
-              socket_address: { address: 127.0.0.1, port_value: 10002 }
+      cluster_name: vless_ws_cluster
+      endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: 127.0.0.1, port_value: 10002 } } } }] }]
+  - name: trojan_xh_cluster
+    connect_timeout: 10s
+    type: STATIC
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: trojan_xh_cluster
+      endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: 127.0.0.1, port_value: 10010 } } } }] }]
+  - name: vless_xh_cluster
+    connect_timeout: 10s
+    type: STATIC
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: vless_xh_cluster
+      endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: 127.0.0.1, port_value: 10009 } } } }] }]
 EOF
     cat > entrypoint.sh <<'EOF'
 #!/bin/sh
@@ -655,7 +605,6 @@ FROM alpine:3.20 AS builder
 RUN apk add --no-cache curl unzip ca-certificates
 RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip && unzip -q xray.zip xray && chmod +x xray
 FROM envoyproxy/envoy:v1.30-latest
-RUN apt-get update && apt-get install -y -qq supervisor && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /xray /usr/local/bin/xray
 COPY config.json /etc/xray.json
 COPY envoy.yaml /etc/envoy.yaml
@@ -666,42 +615,43 @@ ENTRYPOINT ["/entrypoint.sh"]
 EOF
 
   elif [ "$ENGINE" = "haproxy" ]; then
-    DECOY_HTML_ESCAPED=$(generate_decoy_html | sed -e ':a' -e 'N' -e '$!ba' -e "s/'/\\\\'/g" -e 's/"/\\"/g' -e 's/\n/\\n/g')
-    cat > haproxy.cfg <<EOF
+    cat > haproxy.cfg <<'EOF'
 global
     log stdout format raw local0
     maxconn 65536
-    tune.maxrewrite 1024
-    tune.bufsize 32768
 defaults
     log global
     mode http
     timeout connect 10s
-    timeout client 7200s
-    timeout server 7200s
-    timeout http-request 10s
-    option http-keep-alive
-    default-server inter 3s fall 3 rise 2
+    timeout client 3600s
+    timeout server 3600s
 frontend main
     bind *:8080
-    # Anti-DDoS — Slowloris & conn limits
-    timeout http-request 5s
-    maxconn 16384
     acl is_health path /health
-    acl is_trojan path_beg /trojan-ws
-    acl is_vless path_beg /vless-ws
+    acl is_trojan_ws path_beg /trojan-ws
+    acl is_vless_ws path_beg /vless-ws
+    acl is_trojan_xh path_beg /trojan-xhttp
+    acl is_vless_xh path_beg /vless-http
+
     use_backend health_backend if is_health
-    use_backend trojan_backend if is_trojan
-    use_backend vless_backend if is_vless
+    use_backend trojan_ws_backend if is_trojan_ws
+    use_backend vless_ws_backend if is_vless_ws
+    use_backend trojan_xh_backend if is_trojan_xh
+    use_backend vless_xh_backend if is_vless_xh
     default_backend default_backend
+
 backend health_backend
     http-request return status 200 content-type "text/plain" string "OK\n"
 backend default_backend
-    http-request return status 200 content-type "text/html" string "$DECOY_HTML_ESCAPED"
-backend trojan_backend
-    server xray1 127.0.0.1:10001 check inter 10s
-backend vless_backend
-    server xray2 127.0.0.1:10002 check inter 10s
+    http-request return status 200 content-type "text/html" string "Application Gateway Operational"
+backend trojan_ws_backend
+    server xray_tws 127.0.0.1:10001
+backend vless_ws_backend
+    server xray_vws 127.0.0.1:10002
+backend trojan_xh_backend
+    server xray_txh 127.0.0.1:10010
+backend vless_xh_backend
+    server xray_vxh 127.0.0.1:10009
 EOF
     cat > entrypoint.sh <<'EOF'
 #!/bin/sh
@@ -715,7 +665,6 @@ FROM alpine:3.20 AS builder
 RUN apk add --no-cache curl unzip ca-certificates
 RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip && unzip -q xray.zip xray && chmod +x xray
 FROM haproxy:2.8-alpine
-RUN apk add --no-cache supervisor
 COPY --from=builder /xray /usr/local/bin/xray
 COPY config.json /etc/xray.json
 COPY haproxy.cfg /usr/local/etc/haproxy/haproxy.cfg
@@ -727,12 +676,10 @@ ENTRYPOINT ["/entrypoint.sh"]
 EOF
 
   elif [ "$ENGINE" = "caddy" ]; then
-    DECOY_HTML_ESCAPED=$(generate_decoy_html | sed -e ':a' -e 'N' -e '$!ba' -e 's/`/\\`/g' -e 's/\\/\\\\/g')
-    cat > Caddyfile <<EOF
+    cat > Caddyfile <<'EOF'
 {
     admin off
     http_port 8080
-    grace_period 30s
 }
 :8080 {
     handle /health {
@@ -742,31 +689,29 @@ EOF
         reverse_proxy 127.0.0.1:10001 {
             header_up Host {host}
             header_up X-Real-IP {remote_host}
-            header_up Connection "Upgrade"
-            header_up Upgrade "websocket"
-            transport http {
-                keepalive_idle_conns 256
-                dial_timeout 10s
-                response_header_timeout 7200s
-            }
         }
     }
     handle /vless-ws* {
         reverse_proxy 127.0.0.1:10002 {
             header_up Host {host}
             header_up X-Real-IP {remote_host}
-            header_up Connection "Upgrade"
-            header_up Upgrade "websocket"
-            transport http {
-                keepalive_idle_conns 256
-                dial_timeout 10s
-                response_header_timeout 7200s
-            }
+        }
+    }
+    handle /trojan-xhttp* {
+        reverse_proxy 127.0.0.1:10010 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+        }
+    }
+    handle /vless-http* {
+        reverse_proxy 127.0.0.1:10009 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
         }
     }
     handle {
-        header Content-Type text/html
-        respond \`$DECOY_HTML_ESCAPED\` 200
+        root * /usr/share/caddy
+        file_server
     }
 }
 EOF
@@ -782,10 +727,10 @@ FROM alpine:3.20 AS builder
 RUN apk add --no-cache curl unzip ca-certificates
 RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip && unzip -q xray.zip xray && chmod +x xray
 FROM caddy:2.7-alpine
-RUN apk add --no-cache supervisor
 COPY --from=builder /xray /usr/local/bin/xray
 COPY config.json /etc/xray.json
 COPY Caddyfile /etc/Caddyfile
+COPY index.html /usr/share/caddy/index.html
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /usr/local/bin/xray /entrypoint.sh
 EXPOSE 8080
@@ -793,8 +738,7 @@ ENTRYPOINT ["/entrypoint.sh"]
 EOF
 
   elif [ "$ENGINE" = "singbox" ]; then
-    DECOY_HTML_ESCAPED=$(generate_decoy_html | sed -e ':a' -e 'N' -e '$!ba' -e 's/`/\\`/g')
-    cat > Caddyfile <<EOF
+    cat > Caddyfile <<'EOF'
 {
     admin off
     http_port 8080
@@ -807,21 +751,29 @@ EOF
         reverse_proxy 127.0.0.1:10001 {
             header_up Host {host}
             header_up X-Real-IP {remote_host}
-            header_up Connection "Upgrade"
-            header_up Upgrade "websocket"
         }
     }
     handle /vless-ws* {
         reverse_proxy 127.0.0.1:10002 {
             header_up Host {host}
             header_up X-Real-IP {remote_host}
-            header_up Connection "Upgrade"
-            header_up Upgrade "websocket"
+        }
+    }
+    handle /trojan-xhttp* {
+        reverse_proxy 127.0.0.1:10010 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+        }
+    }
+    handle /vless-http* {
+        reverse_proxy 127.0.0.1:10009 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
         }
     }
     handle {
-        header Content-Type text/html
-        respond \`$DECOY_HTML_ESCAPED\` 200
+        root * /usr/share/caddy
+        file_server
     }
 }
 EOF
@@ -835,14 +787,7 @@ EOF
       "listen": "127.0.0.1",
       "listen_port": 10001,
       "users": [{ "password": "gcp-xray" }],
-      "transport": {
-        "type": "ws",
-        "path": "/trojan-ws",
-        "headers": {},
-        "max_early_data": 0
-      },
-      "tcp_keepalive_interval": 30,
-      "tcp_keepalive_idle": 300
+      "transport": { "type": "ws", "path": "/trojan-ws" }
     },
     {
       "type": "vless",
@@ -850,12 +795,23 @@ EOF
       "listen": "127.0.0.1",
       "listen_port": 10002,
       "users": [{ "uuid": "a1b2c3d4-5678-40ef-98ab-cdef01234567" }],
-      "transport": {
-        "type": "ws",
-        "path": "/vless-ws"
-      },
-      "tcp_keepalive_interval": 30,
-      "tcp_keepalive_idle": 300
+      "transport": { "type": "ws", "path": "/vless-ws" }
+    },
+    {
+      "type": "trojan",
+      "tag": "trojan-xh",
+      "listen": "127.0.0.1",
+      "listen_port": 10010,
+      "users": [{ "password": "gcp-xray" }],
+      "transport": { "type": "http", "path": "/trojan-xhttp" }
+    },
+    {
+      "type": "vless",
+      "tag": "vless-xh",
+      "listen": "127.0.0.1",
+      "listen_port": 10009,
+      "users": [{ "uuid": "a1b2c3d4-5678-40ef-98ab-cdef01234567" }],
+      "transport": { "type": "http", "path": "/vless-http" }
     }
   ],
   "outbounds": [{ "type": "direct", "tag": "direct" }]
@@ -871,10 +827,10 @@ EOF
     cat > Dockerfile <<'EOF'
 FROM ghcr.io/sagernet/sing-box:latest AS singbox-builder
 FROM caddy:2.7-alpine
-RUN apk add --no-cache supervisor
 COPY --from=singbox-builder /usr/local/bin/sing-box /usr/local/bin/sing-box
 COPY singbox.json /etc/singbox.json
 COPY Caddyfile /etc/Caddyfile
+COPY index.html /usr/share/caddy/index.html
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /usr/local/bin/sing-box /entrypoint.sh
 EXPOSE 8080
@@ -884,6 +840,7 @@ EOF
 
   echo -e "${CYAN}🔨 Building image ($ENGINE engine)...${NC}"
   gcloud builds submit --project="$PROJECT_ID" --tag gcr.io/$PROJECT_ID/$CLOUD_RUN_SERVICE_NAME . --quiet
+
   echo -e "${CYAN}🚀 Deploying to Cloud Run...${NC}"
   gcloud run deploy "$CLOUD_RUN_SERVICE_NAME" \
     --image gcr.io/$PROJECT_ID/$CLOUD_RUN_SERVICE_NAME \
@@ -906,10 +863,31 @@ EOF
   echo -e "${GREEN}💚 HEALTH CHECK:${NC} $CANONICAL_LINK/health"
   echo -e "${CYAN}=========================================${NC}"
   echo -e "${GREEN}🛡️  PROTECTIONS APPLIED:${NC}"
-  echo -e "  ✅ Anti-DDoS (rate/conn limits)"
-  echo -e "  ✅ Log Cleaner (3-day auto-purge)"
-  echo -e "  ✅ Supervisord (auto-restart services)"
-  echo -e "  ✅ Solid Keepalive (7200s timeout)"
-  echo -e "  ✅ Custom Decoy Gateway Page"
+  echo -e "  ✅ Anti-DDoS & Kernel Tuning"
+  echo -e "  ✅ Log Cleaner & Supervisord"
+  echo -e "  ✅ Decoy Gateway Page (Separate Static File)"
   echo ""
-  read -p $'\nPress [
+  read -p "Press [Enter] to return to Main Menu..."
+}
+
+# ==============================================
+# MAIN MENU LOOP
+# ==============================================
+while true; do
+  clear
+  echo "======================================"
+  echo "PENTA-ENGINE GCP-XRAY DEPLOYER MENU"
+  echo "======================================"
+  echo "1) Deploy New Service"
+  echo "2) List All Services & Full Details"
+  echo "3) Exit"
+  echo "======================================"
+  read -p "Select Option [1-3]: " MENU_CHOICE
+
+  case $MENU_CHOICE in
+    1) deploy_new_service ;;
+    2) list_deployed_services ;;
+    3) echo -e "\n👋 Goodbye!"; exit 0 ;;
+    *) echo -e "${RED}❌ Enter 1/2/3 only${NC}"; sleep 2 ;;
+  esac
+done
