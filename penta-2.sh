@@ -2,10 +2,10 @@
 set -euo pipefail
 
 # =========================================
-# 🚀 GCP-XRAY MULTI-ENGINE DEPLOYER
+# 🚀 GCP-XRAY MULTI-ENGINE DEPLOYER — FIXED
 # ✅ ENGINES: OPENRESTY, ENVOY, HAPROXY, CADDY, SING-BOX
 # ✅ PURE WS ONLY — NO XHTTP
-# ✅ FIXED: Envoy/HAProxy/Caddy Startup — OpenResty & Sing-Box UNCHANGED
+# ✅ FIXED: All engines startup / port readiness / download links
 # ✅ Decoy Page | Anti-DDoS | Log Cleaner
 # =========================================
 
@@ -83,15 +83,14 @@ EOF
 }
 
 # ==============================================
-# FIX: ADD GPG KEY FIRST + SUPERVISORD
+# FIXED: GPG KEY + GitHub CLI — NO DEAD LINKS
 # ==============================================
 install_supervisord() {
-  echo -e "${CYAN}🔧 Fixing GitHub CLI GPG key...${NC}"
-  # Idugang ang nawala nga public key — ayaw kini laktawi
-  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+  echo -e "${CYAN}🔧 Setting up GitHub CLI repo...${NC}"
+  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg 2>/dev/null | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null || \
+  { echo "Fallback: Fetching key via keyserver..."; sudo gpg --batch --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C99B0406F99553504083502F435301004F905277; sudo gpg --batch --armor --export C99B0406F99553504083502F435301004F905277 | sudo gpg --batch --dearmor > /usr/share/keyrings/githubcli-archive-keyring.gpg; }
+  
   sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
-
-  # Siguroha nga tama ang sources.list entry
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
 
   echo -e "${CYAN}📦 Installing Supervisord...${NC}"
@@ -184,8 +183,8 @@ select_region() {
   echo "--- Asia Pacific ---"
   echo "5) asia-east1       (Taiwan 🇹🇼 — RECOMMENDED!)"
   echo "6) asia-southeast1  (Singapore 🇸🇬)"
-  echo "7) asia-northeast1   (Tokyo, Japan 🇯🇵)"
-  echo "8) asia-northeast3   (Seoul, South Korea 🇰🇷)"
+  echo "7) asia-northeast1  (Tokyo, Japan 🇯🇵)"
+  echo "8) asia-northeast3  (Seoul, South Korea 🇰🇷)"
   echo "9) asia-south1      (Mumbai, India 🇮🇳)"
   echo ""
   echo "--- Europe ---"
@@ -328,7 +327,6 @@ deploy_new_service() {
   trap 'rm -rf "$BUILD_DIR"' EXIT
   cd "$BUILD_DIR" || exit 1
 
-  # Decoy Page
   cat > index.html <<'EOF'
 <!DOCTYPE html>
 <html lang="en">
@@ -382,9 +380,6 @@ EOF
   echo -e "${GREEN}✅ Protocol:${NC} Trojan-WS / VLESS-WS ONLY"
   echo ""
 
-  # ==============================================
-  # XRAY CONFIG — WS ONLY! NO XHTTP
-  # ==============================================
   cat > config.json <<'EOF'
 {
   "log": {"loglevel": "warning"},
@@ -407,9 +402,6 @@ EOF
 }
 EOF
 
-  # ==============================================
-  # OPENRESTY — ✅ UNCHANGED / ORIGINAL
-  # ==============================================
   if [ "$ENGINE" = "openresty" ]; then
     cat > nginx.conf <<'EOF'
 worker_processes auto;
@@ -434,6 +426,7 @@ http {
       proxy_set_header Connection "upgrade";
       proxy_set_header Host $host;
       proxy_read_timeout 7200s;
+      proxy_send_timeout 7200s;
     }
     location /vless-ws {
       proxy_pass http://127.0.0.1:10002;
@@ -441,6 +434,7 @@ http {
       proxy_set_header Connection "upgrade";
       proxy_set_header Host $host;
       proxy_read_timeout 7200s;
+      proxy_send_timeout 7200s;
     }
   }
 }
@@ -449,15 +443,28 @@ EOF
 #!/bin/sh
 set -e
 /usr/local/bin/xray run -c /etc/xray.json &
-sleep 3
+XRAY_PID=$!
+for i in 1 2 3 4 5 6 7 8 9 10 12 15; do
+  if kill -0 $XRAY_PID 2>/dev/null && ss -tln | grep -qE ':(10001|10002)'; then
+    echo "✅ Xray ready — port bound"
+    break
+  fi
+  echo "Waiting Xray... ${i}s"
+  sleep 1
+done
+if ! kill -0 $XRAY_PID 2>/dev/null; then
+  echo "❌ Xray exited during startup"
+  exit 1
+fi
 exec /usr/local/openresty/bin/openresty -g 'daemon off;'
 EOF
     chmod +x entrypoint.sh
     cat > Dockerfile <<'EOF'
 FROM alpine:3.20 AS builder
 RUN apk add --no-cache curl unzip ca-certificates
-RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip && \
-    unzip -q xray.zip xray && chmod +x xray
+RUN curl -fsSL https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip || \
+  curl -fsSL https://github.com/XTLS/Xray-core/releases/download/v24.11.22/Xray-linux-64.zip -o xray.zip
+RUN unzip -q xray.zip xray && chmod +x xray
 
 FROM openresty/openresty:alpine-fat
 COPY --from=builder /xray /usr/local/bin/xray
@@ -470,38 +477,7 @@ EXPOSE 8080
 ENTRYPOINT ["/entrypoint.sh"]
 EOF
 
-  # ==============================================
-  # ENVOY — ✅ FIXED: 0.0.0.0 + Health Check + Longer Delay
-  # ==============================================
   elif [ "$ENGINE" = "envoy" ]; then
-    cat > config.json <<'EOF'
-{
-  "log": {"loglevel": "warning"},
-  "dns": {"servers": ["223.5.5.5", "223.6.6.6"], "queryStrategy": "UseIP"},
-  "inbounds": [
-    {
-      "port": 10001,
-      "listen": "0.0.0.0",
-      "protocol": "trojan",
-      "tag": "trojan-ws",
-      "settings": {"clients": [{"password": "gcp-xray"}]},
-      "streamSettings": {"network": "ws", "wsSettings": {"path": "/trojan-ws"}, "sockopt": {"tcpFastOpen": true, "tcpNoDelay": true}},
-      "sniffing": {"enabled": false}
-    },
-    {
-      "port": 10002,
-      "listen": "0.0.0.0",
-      "protocol": "vless",
-      "tag": "vless-ws",
-      "settings": {"clients": [{"id": "a1b2c3d4-5678-40ef-98ab-cdef01234567"}], "decryption": "none"},
-      "streamSettings": {"network": "ws", "wsSettings": {"path": "/vless-ws"}, "sockopt": {"tcpFastOpen": true, "tcpNoDelay": true}},
-      "sniffing": {"enabled": false}
-    }
-  ],
-  "outbounds": [{"protocol": "freedom", "tag": "direct", "settings": {"domainStrategy": "AsIs"}}]
-}
-EOF
-
     cat > envoy.yaml <<'EOF'
 static_resources:
   listeners:
@@ -525,19 +501,19 @@ static_resources:
             - name: local_service
               domains: ["*"]
               routes:
-              - match: { prefix: "/health" }
+              - match: { path: "/health" }
                 direct_response: { status: 200, body: { inline_string: "OK\n" } }
               - match: { prefix: "/trojan-ws" }
                 route: { cluster: trojan_ws, timeout: 3600s, idle_timeout: 3600s }
               - match: { prefix: "/vless-ws" }
                 route: { cluster: vless_ws, timeout: 3600s, idle_timeout: 3600s }
               - match: { prefix: "/" }
-                direct_response: { status: 200, body: { inline_string: "Gateway Operational" } }
+                direct_response: { status: 200, body: { inline_string: "Gateway Operational\n" } }
           http_filters:
           - name: envoy.filters.http.router
   clusters:
   - name: trojan_ws
-    connect_timeout: 15s
+    connect_timeout: 30s
     type: STATIC
     load_assignment:
       cluster_name: trojan_ws
@@ -549,7 +525,7 @@ static_resources:
                 address: 127.0.0.1
                 port_value: 10001
   - name: vless_ws
-    connect_timeout: 15s
+    connect_timeout: 30s
     type: STATIC
     load_assignment:
       cluster_name: vless_ws
@@ -561,44 +537,32 @@ static_resources:
                 address: 127.0.0.1
                 port_value: 10002
 EOF
-
     cat > entrypoint.sh <<'EOF'
 #!/bin/sh
 set -e
 export PORT=8080
-
 echo "Starting Xray..."
 /usr/local/bin/xray run -c /etc/xray.json &
 XRAY_PID=$!
-
-# ✅ Dugayon ang delay — Cloud Run nagpaabot
-sleep 8
-
-# ✅ I-check kung nagdungog na ang Xray
-for i in 1 2 3 4 5 6 7 8 9 10; do
-  if kill -0 $XRAY_PID 2>/dev/null && ss -tln | grep -q ':1000[12]'; then
+for i in 1 2 3 4 5 6 7 8 9 10 12 15 20; do
+  if kill -0 $XRAY_PID 2>/dev/null && ss -tln | grep -qE ':(10001|10002)'; then
     echo "✅ Xray ports ready — attempt $i"
     break
   fi
-  echo "Waiting Xray... attempt $i"
-  sleep 2
+  if ! kill -0 $XRAY_PID 2>/dev/null; then echo "❌ Xray crashed"; exit 1; fi
+  echo "Waiting Xray... ${i}s"
+  sleep 1
 done
-
-if ! kill -0 $XRAY_PID 2>/dev/null; then
-  echo "❌ ERROR: Xray exited prematurely"
-  exit 1
-fi
-
 echo "🚀 Starting Envoy on 0.0.0.0:8080"
 exec envoy -c /etc/envoy.yaml
 EOF
-
     chmod +x entrypoint.sh
     cat > Dockerfile <<'EOF'
 FROM alpine:3.20 AS builder
 RUN apk add --no-cache curl unzip ca-certificates
-RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip && \
-    unzip -q xray.zip xray && chmod +x xray
+RUN curl -fsSL https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip || \
+  curl -fsSL https://github.com/XTLS/Xray-core/releases/download/v24.11.22/Xray-linux-64.zip -o xray.zip
+RUN unzip -q xray.zip xray && chmod +x xray
 
 FROM envoyproxy/envoy:v1.30-latest
 ENV PORT=8080
@@ -611,46 +575,34 @@ EXPOSE 8080
 ENTRYPOINT ["/entrypoint.sh"]
 EOF
 
-  # ==============================================
-  # HAPROXY — ✅ FIXED PATH + STARTUP + PORT
-  # ==============================================
   elif [ "$ENGINE" = "haproxy" ]; then
     cat > haproxy.cfg <<'EOF'
 global
     log stdout format raw local0
     maxconn 65536
     chroot /var/lib/haproxy
-    stats socket /run/haproxy.sock mode 660
+    stats socket /run/haproxy.sock mode 660 expose-fd listeners
     user haproxy
     group haproxy
 
 defaults
     log global
     mode http
-    timeout connect 10s
+    timeout connect 30s
     timeout client 3600s
     timeout server 3600s
 
 frontend main
     bind 0.0.0.0:8080
-    acl health path /health
-    acl tws path_beg /trojan-ws
-    acl vws path_beg /vless-ws
-
-    use_backend health_back if health
-    use_backend trojan_ws_back if tws
-    use_backend vless_ws_back if vws
-    default_backend decoy_back
-
-backend health_back
-    http-request return status 200 content-type text/plain string "OK\n"
-
-backend decoy_back
-    http-request return status 200 content-type text/html string "Gateway Operational"
+    http-request return status 200 content-type text/plain string "OK\n" if { path -i /health }
+    acl trojan_ws path_beg /trojan-ws
+    acl vless_ws path_beg /vless-ws
+    use_backend trojan_ws_back if trojan_ws
+    use_backend vless_ws_back if vless_ws
+    http-request return status 200 content-type text/html string "Gateway Operational\n"
 
 backend trojan_ws_back
     server xray 127.0.0.1:10001
-
 backend vless_ws_back
     server xray 127.0.0.1:10002
 EOF
@@ -658,32 +610,27 @@ EOF
 #!/bin/sh
 set -e
 export PORT=8080
-
-# Prepare HAProxy runtime dir
 mkdir -p /var/lib/haproxy /run
-
-# Start Xray background
 /usr/local/bin/xray run -c /etc/xray.json &
 XRAY_PID=$!
-
-# Give Xray enough time to bind ports
-sleep 5
-
-# Verify Xray still running
-if ! kill -0 $XRAY_PID 2>/dev/null; then
-  echo "ERROR: Xray process failed"
-  exit 1
-fi
-
-echo "Xray ready — starting HAProxy on :8080"
+for i in 1 2 3 4 5 6 7 8 9 10 12 15 20; do
+  if kill -0 $XRAY_PID 2>/dev/null && ss -tln | grep -qE ':(10001|10002)'; then
+    echo "✅ Xray ready — attempt $i"
+    break
+  fi
+  if ! kill -0 $XRAY_PID 2>/dev/null; then echo "❌ Xray failed"; exit 1; fi
+  echo "Waiting Xray... ${i}s"
+  sleep 1
+done
 exec haproxy -f /etc/haproxy/haproxy.cfg -db
 EOF
     chmod +x entrypoint.sh
     cat > Dockerfile <<'EOF'
 FROM alpine:3.20 AS builder
 RUN apk add --no-cache curl unzip ca-certificates
-RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip && \
-    unzip -q xray.zip xray && chmod +x xray
+RUN curl -fsSL https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip || \
+  curl -fsSL https://github.com/XTLS/Xray-core/releases/download/v24.11.22/Xray-linux-64.zip -o xray.zip
+RUN unzip -q xray.zip xray && chmod +x xray
 
 FROM haproxy:2.8-alpine
 ENV PORT=8080
@@ -692,19 +639,16 @@ COPY --from=builder /xray /usr/local/bin/xray
 COPY config.json /etc/xray.json
 COPY haproxy.cfg /etc/haproxy/haproxy.cfg
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /usr/local/bin/xray /entrypoint.sh && \
-    mkdir -p /var/lib/haproxy /run
+RUN chmod +x /usr/local/bin/xray /entrypoint.sh && mkdir -p /var/lib/haproxy /run
 EXPOSE 8080
 ENTRYPOINT ["/entrypoint.sh"]
 EOF
 
-  # ==============================================
-  # CADDY — ✅ FIXED STARTUP + PORT
-  # ==============================================
   elif [ "$ENGINE" = "caddy" ]; then
     cat > Caddyfile <<'EOF'
 {
     http_port 8080
+    grace_period 30s
 }
 :8080 {
     handle /health { respond "OK\n" 200 }
@@ -712,14 +656,12 @@ EOF
         reverse_proxy 127.0.0.1:10001 {
             header_up Upgrade "websocket"
             header_up Connection "Upgrade"
-            header_up Host {host}
         }
     }
     handle /vless-ws* {
         reverse_proxy 127.0.0.1:10002 {
             header_up Upgrade "websocket"
             header_up Connection "Upgrade"
-            header_up Host {host}
         }
     }
     handle { root * /usr/share/caddy; file_server }
@@ -729,29 +671,26 @@ EOF
 #!/bin/sh
 set -e
 export PORT=8080
-
-# Start Xray background
 /usr/local/bin/xray run -c /etc/xray.json &
 XRAY_PID=$!
-
-# Give Xray enough time to bind ports
-sleep 5
-
-# Verify Xray still running
-if ! kill -0 $XRAY_PID 2>/dev/null; then
-  echo "ERROR: Xray process failed"
-  exit 1
-fi
-
-echo "Xray ready — starting Caddy on :8080"
+for i in 1 2 3 4 5 6 7 8 9 10 12 15 20; do
+  if kill -0 $XRAY_PID 2>/dev/null && ss -tln | grep -qE ':(10001|10002)'; then
+    echo "✅ Xray ready — attempt $i"
+    break
+  fi
+  if ! kill -0 $XRAY_PID 2>/dev/null; then echo "❌ Xray failed"; exit 1; fi
+  echo "Waiting Xray... ${i}s"
+  sleep 1
+done
 exec caddy run --config /etc/Caddyfile
 EOF
     chmod +x entrypoint.sh
     cat > Dockerfile <<'EOF'
 FROM alpine:3.20 AS builder
 RUN apk add --no-cache curl unzip ca-certificates
-RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip && \
-    unzip -q xray.zip xray && chmod +x xray
+RUN curl -fsSL https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip || \
+  curl -fsSL https://github.com/XTLS/Xray-core/releases/download/v24.11.22/Xray-linux-64.zip -o xray.zip
+RUN unzip -q xray.zip xray && chmod +x xray
 
 FROM caddy:2.7-alpine
 ENV PORT=8080
@@ -765,13 +704,11 @@ EXPOSE 8080
 ENTRYPOINT ["/entrypoint.sh"]
 EOF
 
-  # ==============================================
-  # SING-BOX — ✅ UNCHANGED / ORIGINAL
-  # ==============================================
   elif [ "$ENGINE" = "singbox" ]; then
     cat > Caddyfile <<'EOF'
 {
     http_port 8080
+    grace_period 30s
 }
 :8080 {
     handle /health { respond "OK\n" 200 }
@@ -804,7 +741,16 @@ EOF
 #!/bin/sh
 set -e
 /usr/local/bin/sing-box run -c /etc/singbox.json &
-sleep 3
+SB_PID=$!
+for i in 1 2 3 4 5 6 7 8 9 10 12 15 20; do
+  if kill -0 $SB_PID 2>/dev/null && ss -tln | grep -qE ':(10001|10002)'; then
+    echo "✅ Sing-Box ready — attempt $i"
+    break
+  fi
+  if ! kill -0 $SB_PID 2>/dev/null; then echo "❌ Sing-Box failed"; exit 1; fi
+  echo "Waiting Sing-Box... ${i}s"
+  sleep 1
+done
 exec caddy run --config /etc/Caddyfile
 EOF
     chmod +x entrypoint.sh
@@ -841,13 +787,13 @@ EOF
 }
 
 # ==============================================
-# MAIN MENU — UNCHANGED / ORIGINAL
+# ✅ MAIN MENU — RESTORED & COMPLETE
 # ==============================================
 while true; do
   clear
   echo "======================================"
-  echo "PENTA-ENGINE GCP-XRAY DEPLOYER"
-  echo "WS ONLY — NO XHTTP"
+  echo "     PENTA-ENGINE GCP-XRAY DEPLOYER"
+  echo "           WS ONLY — NO XHTTP"
   echo "======================================"
   echo "1) Deploy New Service"
   echo "2) List All Services"
