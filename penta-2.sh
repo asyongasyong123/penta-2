@@ -1,13 +1,11 @@
 #!/bin/bash
 set -euo pipefail
-
 # =========================================
 # 🚀 GCP-XRAY MULTI-ENGINE DEPLOYER + SING-BOX
 # ✅ ENGINES: OPENRESTY, ENVOY, HAPROXY, CADDY, SING-BOX
 # ✅ SOLID HOST TUNING | ANTI-DDOS | LOG CLEANER | SUPERVISORD
 # ✅ Custom Decoy HTML — No Sniffing
 # =========================================
-
 GREEN='\033[1;32m'
 RED='\033[1;31m'
 YELLOW='\033[1;33m'
@@ -49,7 +47,6 @@ net.ipv4.tcp_wmem = 4096 65536 33554432
 net.ipv4.tcp_low_latency = 1
 net.ipv4.tcp_mtu_probing = 1
 net.ipv4.ip_local_port_range = 1024 65535
-
 # Anti-DDoS / Hardening
 net.ipv4.tcp_syncookies = 1
 net.ipv4.tcp_rfc1337 = 1
@@ -59,7 +56,6 @@ net.ipv4.icmp_echo_ignore_broadcasts = 1
 net.ipv4.icmp_ignore_bogus_error_responses = 1
 EOF
   sudo sysctl -p /etc/sysctl.d/99-solid-host.conf >/dev/null 2>&1
-
   # File Descriptors
   sudo tee /etc/security/limits.d/99-proxy-limits.conf > /dev/null <<'EOF'
 * soft nofile 65536
@@ -107,7 +103,6 @@ list_deployed_services() {
   PROJECT_ID="$(gcloud config get-value project 2>/dev/null)"
   echo "Project: $PROJECT_ID"
   echo ""
-
   declare -A REGION_NAMES=(
     ["us-central1"]="Iowa, United States 🇺🇸"
     ["us-east1"]="South Carolina, United States 🇺🇸"
@@ -122,11 +117,9 @@ list_deployed_services() {
     ["europe-west9"]="Paris, France 🇫🇷"
     ["asia-south1"]="Mumbai, India 🇮🇳"
   )
-
   SERVICES=$(gcloud run services list \
     --format="value(metadata.name, status.url, region, metadata.creationTimestamp.date(%Y-%m-%d))" \
     --project="$PROJECT_ID" 2>/dev/null)
-
   if [ -z "$SERVICES" ]; then
     echo -e "${RED}❌ No services found.${NC}"
   else
@@ -134,7 +127,6 @@ list_deployed_services() {
     while IFS=$'\t' read -r NAME URL REGION CREATED; do
       [ -z "$NAME" ] && continue
       FULL_REGION="${REGION_NAMES[$REGION]:-$REGION}"
-
       DETAILS=$(gcloud run services describe "$NAME" --region "$REGION" --project="$PROJECT_ID" --format=json 2>/dev/null || true)
       if [ -z "$DETAILS" ]; then
         echo -e "${GREEN}=== SERVICE #$COUNT ===${NC}"
@@ -146,7 +138,6 @@ list_deployed_services() {
         ((COUNT++))
         continue
       fi
-
       MEMORY=$(echo "$DETAILS" | jq -r '.spec.template.spec.containers[0].resources.limits.memory // "1Gi"')
       CPU=$(echo "$DETAILS" | jq -r '.spec.template.spec.containers[0].resources.limits.cpu // "1"')
       BILLING=$(echo "$DETAILS" | jq -r '.spec.template.spec.billingMode // "Instance Based"' | sed 's/_/ /g;s/^./\U&/')
@@ -154,7 +145,6 @@ list_deployed_services() {
       MAX_INST=$(echo "$DETAILS" | jq -r '.spec.template.spec.maxInstances // "1"')
       CONCURRENCY=$(echo "$DETAILS" | jq -r '.spec.template.spec.containerConcurrency // "300"')
       TIMEOUT=$(echo "$DETAILS" | jq -r '.spec.template.spec.timeoutSeconds // "300"')
-
       echo -e "${GREEN}=== SERVICE #$COUNT ===${NC}"
       echo "🔹 Name:         $NAME"
       echo "🔹 URL:          $URL"
@@ -169,7 +159,6 @@ list_deployed_services() {
       ((COUNT++))
     done <<< "$SERVICES"
   fi
-  
   echo -e "\n======================================"
   read -p "Press [Enter] to return..."
 }
@@ -199,9 +188,7 @@ select_region() {
   echo ""
   echo "0) Enter custom region code"
   echo ""
-
   read -p "Enter region number: " REGION_NUM
-
   case $REGION_NUM in
     1) REGION="us-central1" ;;
     2) REGION="us-east1" ;;
@@ -218,7 +205,6 @@ select_region() {
     0) read -p "Type full region code: " REGION ;;
     *) echo -e "${YELLOW}⚠️ Invalid! Using us-central1${NC}"; REGION="us-central1" ;;
   esac
-
   echo -e "${GREEN}✅ Selected Region:${NC} $REGION"
 }
 
@@ -276,16 +262,13 @@ deploy_new_service() {
   sysctl_optimize
   setup_log_cleaner
   install_supervisord
-
   select_region
-
   PROJECT_ID="$(gcloud config get-value project 2>/dev/null)"
   if [ -z "$PROJECT_ID" ]; then
       echo -e "${RED}❌ No project set! Run: gcloud config set project YOUR_ID${NC}"
       read -p "Press [Enter] to return..."
       return
   fi
-
   gcloud services enable run.googleapis.com cloudbuild.googleapis.com --project="$PROJECT_ID" --quiet
 
   # ==============================================
@@ -332,7 +315,6 @@ deploy_new_service() {
               
               BILLING_MODE="instance"
               BILLING_FLAG="--no-cpu-throttling"
-
               case $AUTO_CHOICE in
                   1) 
                     MEMORY="1Gi"; CPU="1"
@@ -369,7 +351,6 @@ deploy_new_service() {
                       *) echo -e "${RED}Enter 1 or 2 only${NC}" ;;
                   esac
               done
-
               echo -e "\n${YELLOW}--- MANUAL SETUP ---${NC}"
               echo "Select Memory:"
               echo "1) 256Mi   2) 512Mi   3) 1Gi   4) 2Gi"
@@ -386,7 +367,6 @@ deploy_new_service() {
                   8) read -p "Type custom memory: " MEMORY ;;
                   *) MEMORY="1Gi" ;;
               esac
-
               echo -e "\nSelect vCPU:"
               echo "1) 1 vCPU   2) 2 vCPU   3) 4 vCPU   4) 8 vCPU   5) Custom input"
               read -p "Select vCPU [1-5]: " CPU_SEL
@@ -398,9 +378,7 @@ deploy_new_service() {
                   5) read -p "Type custom vCPU: " CPU ;;
                   *) CPU="1" ;;
               esac
-
               echo -e "${GREEN}✅ Custom Selected: $MEMORY RAM | $CPU vCPU${NC}"
-
               echo -e "\n${CYAN}=========================================${NC}"
               echo -e "${GREEN}    PERFORMANCE & SCALING CONFIGURATION  ${NC}"
               echo -e "${CYAN}=========================================${NC}"
@@ -412,7 +390,6 @@ deploy_new_service() {
               CONCURRENCY=${CONCURRENCY:-1000}
               read -p "Timeout in seconds [Default: 3600]: " TIMEOUT
               TIMEOUT=${TIMEOUT:-3600}
-
               echo -e "${GREEN}✅ Config Set: Min: $MIN_INST | Max: $MAX_INST | Concurrency: $CONCURRENCY | Timeout: ${TIMEOUT}s${NC}"
               break
               ;;
@@ -423,10 +400,8 @@ deploy_new_service() {
   BUILD_DIR=$(mktemp -d)
   trap 'rm -rf "$BUILD_DIR"' EXIT
   cd "$BUILD_DIR" || exit 1
-
   # Generate decoy HTML
   DECOY_HTML=$(generate_decoy_html)
-
   clear
   echo ""
   echo -e "${CYAN}=========================================${NC}"
@@ -526,7 +501,6 @@ http {
     # Anti-DDoS / Rate Limiting
     limit_req_zone \$binary_remote_addr zone=req_limit:10m rate=30r/s;
     limit_conn_zone \$binary_remote_addr zone=conn_limit:10m;
-
     location /health { return 200 "OK\n"; add_header Content-Type text/plain; }
     location / {
       default_type text/html;
@@ -560,7 +534,6 @@ EOF
 # Start Xray
 /usr/local/bin/xray run -c /etc/xray.json &
 XRAY_PID=$!
-
 # Start supervisord
 if [ -d "/etc/supervisor" ]; then
   cat > /etc/supervisor/conf.d/proxy-services.conf <<SUPCONF
@@ -573,7 +546,6 @@ stdout_logfile=/dev/stdout
 stderr_logfile=/dev/stderr
 stdout_logfile_maxbytes=0
 stderr_logfile_maxbytes=0
-
 [program:openresty]
 command=/usr/local/openresty/bin/openresty -g 'daemon off;'
 autostart=true
@@ -912,7 +884,6 @@ EOF
 
   echo -e "${CYAN}🔨 Building image ($ENGINE engine)...${NC}"
   gcloud builds submit --project="$PROJECT_ID" --tag gcr.io/$PROJECT_ID/$CLOUD_RUN_SERVICE_NAME . --quiet
-
   echo -e "${CYAN}🚀 Deploying to Cloud Run...${NC}"
   gcloud run deploy "$CLOUD_RUN_SERVICE_NAME" \
     --image gcr.io/$PROJECT_ID/$CLOUD_RUN_SERVICE_NAME \
@@ -941,20 +912,4 @@ EOF
   echo -e "  ✅ Solid Keepalive (7200s timeout)"
   echo -e "  ✅ Custom Decoy Gateway Page"
   echo ""
-
-  read -p $'\nPress [Enter] to return to Main Menu...'
-}
-
-while true; do
-  clear
-  echo "======================================"
-  echo "PENTA-ENGINE GCP-XRAY DEPLOYER MENU"
-  echo "SOLID HOST | ANTI-DDOS | SUPERVISORD | DECOY"
-  echo "======================================"
-  echo "1) Deploy New Service"
-  echo "2) List All Services & Full Details"
-  echo "3) Exit"
-  echo "======================================"
-  read -p "Select Option [1-3]: " MENU_CHOICE
-
-  case $MENU
+  read -p $'\nPress [
