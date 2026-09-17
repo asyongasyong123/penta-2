@@ -1,5 +1,3 @@
-Kani idol, gihan-ay na nako ang buo ug limpyo nga script. Gitakod na nako ang bag-ong Dashboard Decoy HTML diretso sa OpenResty, Envoy, HAProxy, Caddy, ug Sing-box configurations para sigurado nga walay syntax error o ma-break sa multi-line string.
-Gisulod na sab diri ang tanang xHTTP (stream-up) ug WebSocket tuning para diretso na ang buga ug dili na mag-timeout sa YouTube.
 #!/bin/bash
 set -euo pipefail
 
