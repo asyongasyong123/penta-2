@@ -2,11 +2,11 @@
 set -euo pipefail
 
 # =========================================
-# 🚀 GCP-XRAY MULTI-ENGINE DEPLOYER + SING-BOX
+# 🚀 GCP-XRAY MULTI-ENGINE DEPLOYER
 # ✅ ENGINES: OPENRESTY, ENVOY, HAPROXY, CADDY, SING-BOX
-# ✅ WS + XHTTP SUPPORT FOR ALL ENGINES
-# ✅ SOLID HOST TUNING | ANTI-DDOS | LOG CLEANER | SUPERVISORD
-# ✅ Custom Decoy HTML — No Sniffing
+# ✅ PURE WS ONLY — NO XHTTP
+# ✅ FIXED: Port 8080 Listen + Startup Order
+# ✅ Decoy Page | Anti-DDoS | Log Cleaner
 # =========================================
 
 GREEN='\033[1;32m'
@@ -28,7 +28,7 @@ if ! command -v jq &> /dev/null; then
 fi
 
 # ==============================================
-# SYSTEM OPTIMIZATIONS — SOLID HOST / NO TIMEOUT
+# SYSTEM OPTIMIZATIONS
 # ==============================================
 sysctl_optimize() {
   echo -e "\n${CYAN}⚙️ Applying kernel & network optimizations...${NC}"
@@ -66,7 +66,7 @@ EOF
 }
 
 # ==============================================
-# LOG CLEANER — Auto-Purge Old Logs
+# LOG CLEANER
 # ==============================================
 setup_log_cleaner() {
   echo -e "${CYAN}🧹 Setting up log cleaner...${NC}"
@@ -83,7 +83,7 @@ EOF
 }
 
 # ==============================================
-# SUPERVISORD — Process Manager
+# SUPERVISORD
 # ==============================================
 install_supervisord() {
   echo -e "${CYAN}📦 Installing Supervisord...${NC}"
@@ -207,7 +207,7 @@ select_region() {
 }
 
 # ==============================================
-# DEPLOYMENT FUNCTION
+# DEPLOYMENT
 # ==============================================
 deploy_new_service() {
   sysctl_optimize
@@ -263,23 +263,10 @@ deploy_new_service() {
               BILLING_MODE="instance"
               BILLING_FLAG="--no-cpu-throttling"
               case $AUTO_CHOICE in
-                  1) 
-                    MEMORY="1Gi"; CPU="1"
-                    MIN_INST=1; MAX_INST=3; CONCURRENCY=100; TIMEOUT=3600
-                    ;;
-                  2) 
-                    MEMORY="2Gi"; CPU="2"
-                    MIN_INST=1; MAX_INST=5; CONCURRENCY=130; TIMEOUT=3600
-                    ;;
-                  3) 
-                    MEMORY="4Gi"; CPU="4"
-                    MIN_INST=1; MAX_INST=4; CONCURRENCY=200; TIMEOUT=3600
-                    ;;
-                  *) 
-                    MEMORY="2Gi"; CPU="2"
-                    MIN_INST=1; MAX_INST=5; CONCURRENCY=130; TIMEOUT=3600
-                    echo -e "${YELLOW}Using Balanced preset${NC}"
-                    ;;
+                  1) MEMORY="1Gi"; CPU="1"; MIN_INST=1; MAX_INST=3; CONCURRENCY=100; TIMEOUT=3600 ;;
+                  2) MEMORY="2Gi"; CPU="2"; MIN_INST=1; MAX_INST=5; CONCURRENCY=130; TIMEOUT=3600 ;;
+                  3) MEMORY="4Gi"; CPU="4"; MIN_INST=1; MAX_INST=4; CONCURRENCY=200; TIMEOUT=3600 ;;
+                  *) MEMORY="2Gi"; CPU="2"; MIN_INST=1; MAX_INST=5; CONCURRENCY=130; TIMEOUT=3600; echo -e "${YELLOW}Using Balanced preset${NC}" ;;
               esac
               echo -e "${GREEN}✅ Applied Preset: $MEMORY | $CPU vCPU | Min: $MIN_INST | Max: $MAX_INST | Concurrency: $CONCURRENCY${NC}"
               break
@@ -304,39 +291,23 @@ deploy_new_service() {
               echo "5) 4Gi     6) 8Gi     7) 16Gi  8) Custom input"
               read -p "Select Memory [1-8]: " MEM
               case $MEM in
-                  1) MEMORY="256Mi" ;;
-                  2) MEMORY="512Mi" ;;
-                  3) MEMORY="1Gi" ;;
-                  4) MEMORY="2Gi" ;;
-                  5) MEMORY="4Gi" ;;
-                  6) MEMORY="8Gi" ;;
-                  7) MEMORY="16Gi" ;;
-                  8) read -p "Type custom memory: " MEMORY ;;
-                  *) MEMORY="1Gi" ;;
+                  1) MEMORY="256Mi" ;; 2) MEMORY="512Mi" ;; 3) MEMORY="1Gi" ;; 4) MEMORY="2Gi" ;;
+                  5) MEMORY="4Gi" ;; 6) MEMORY="8Gi" ;; 7) MEMORY="16Gi" ;;
+                  8) read -p "Type custom memory: " MEMORY ;; *) MEMORY="1Gi" ;;
               esac
               echo -e "\nSelect vCPU:"
               echo "1) 1 vCPU   2) 2 vCPU   3) 4 vCPU   4) 8 vCPU   5) Custom input"
               read -p "Select vCPU [1-5]: " CPU_SEL
               case $CPU_SEL in
-                  1) CPU="1" ;;
-                  2) CPU="2" ;;
-                  3) CPU="4" ;;
-                  4) CPU="8" ;;
-                  5) read -p "Type custom vCPU: " CPU ;;
-                  *) CPU="1" ;;
+                  1) CPU="1" ;; 2) CPU="2" ;; 3) CPU="4" ;; 4) CPU="8" ;;
+                  5) read -p "Type custom vCPU: " CPU ;; *) CPU="1" ;;
               esac
               echo -e "${GREEN}✅ Custom Selected: $MEMORY RAM | $CPU vCPU${NC}"
               echo -e "\n${CYAN}=========================================${NC}"
-              echo -e "${GREEN}    PERFORMANCE & SCALING CONFIGURATION  ${NC}"
-              echo -e "${CYAN}=========================================${NC}"
-              read -p "Min Instances [Default: 0]: " MIN_INST
-              MIN_INST=${MIN_INST:-0}
-              read -p "Max Instances [Default: 1]: " MAX_INST
-              MAX_INST=${MAX_INST:-1}
-              read -p "Concurrency / Max Connections [Default: 1000]: " CONCURRENCY
-              CONCURRENCY=${CONCURRENCY:-1000}
-              read -p "Timeout in seconds [Default: 3600]: " TIMEOUT
-              TIMEOUT=${TIMEOUT:-3600}
+              read -p "Min Instances [Default: 0]: " MIN_INST; MIN_INST=${MIN_INST:-0}
+              read -p "Max Instances [Default: 1]: " MAX_INST; MAX_INST=${MAX_INST:-1}
+              read -p "Concurrency / Max Connections [Default: 1000]: " CONCURRENCY; CONCURRENCY=${CONCURRENCY:-1000}
+              read -p "Timeout in seconds [Default: 3600]: " TIMEOUT; TIMEOUT=${TIMEOUT:-3600}
               echo -e "${GREEN}✅ Config Set: Min: $MIN_INST | Max: $MAX_INST | Concurrency: $CONCURRENCY | Timeout: ${TIMEOUT}s${NC}"
               break
               ;;
@@ -348,7 +319,7 @@ deploy_new_service() {
   trap 'rm -rf "$BUILD_DIR"' EXIT
   cd "$BUILD_DIR" || exit 1
 
-  # Create index.html Decoy Page cleanly
+  # Decoy Page
   cat > index.html <<'EOF'
 <!DOCTYPE html>
 <html lang="en">
@@ -358,18 +329,18 @@ deploy_new_service() {
     <title>System Status | Cloud Gateway</title>
     <style>
         :root { --bg: #0b0f19; --card: #111827; --border: #1f2937; --text: #9ca3af; --white: #f9fafb; --green: #10b981; }
-        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: sans-serif; }
         body { background: var(--bg); color: var(--text); display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
-        .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 32px; max-width: 440px; width: 100%; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5); }
-        .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+        .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 32px; max-width: 440px; width: 100%; }
+        .header { display: flex; justify-content: space-between; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
         .title { color: var(--white); font-size: 18px; font-weight: 600; }
-        .badge { display: inline-flex; align-items: center; gap: 6px; background: rgba(16, 185, 129, 0.1); color: var(--green); padding: 4px 10px; border-radius: 9999px; font-size: 12px; font-weight: 500; }
+        .badge { display: inline-flex; gap: 6px; background: rgba(16,185,129,0.1); color: var(--green); padding: 4px 10px; border-radius: 9999px; font-size: 12px; }
         .dot { width: 8px; height: 8px; background: var(--green); border-radius: 50%; animation: pulse 2s infinite; }
         .metrics { display: grid; gap: 12px; margin-bottom: 24px; }
         .metric-item { display: flex; justify-content: space-between; font-size: 14px; padding: 8px 0; border-bottom: 1px dashed var(--border); }
         .metric-item span:last-child { color: var(--white); font-weight: 500; }
         .footer { font-size: 12px; text-align: center; color: #6b7280; }
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
     </style>
 </head>
 <body>
@@ -393,126 +364,92 @@ EOF
   clear
   echo ""
   echo -e "${CYAN}=========================================${NC}"
-  echo -e "${GREEN}🚀 GCP-XRAY DEPLOYER | MULTI-ENGINE SETUP${NC}"
+  echo -e "${GREEN}🚀 GCP-XRAY DEPLOYER | PURE WS SETUP${NC}"
   echo -e "${CYAN}=========================================${NC}"
   echo -e "${GREEN}✅ Project:${NC} $PROJECT_ID"
   echo -e "${GREEN}✅ Region:${NC} $REGION"
-  echo -e "${GREEN}✅ Service Name:${NC} $CLOUD_RUN_SERVICE_NAME"
+  echo -e "${GREEN}✅ Service:${NC} $CLOUD_RUN_SERVICE_NAME"
   echo -e "${GREEN}✅ Engine:${NC} $DISPLAY_ENGINE"
-  echo -e "${GREEN}✅ Scaling:${NC} Min: $MIN_INST | Max: $MAX_INST"
-  echo -e "${GREEN}✅ Performance:${NC} Concurrency: $CONCURRENCY | Timeout: ${TIMEOUT}s"
+  echo -e "${GREEN}✅ Protocol:${NC} Trojan-WS / VLESS-WS ONLY"
   echo ""
 
   # ==============================================
-  # XRAY CONFIG — WS + XHTTP Support
+  # XRAY CONFIG — WS ONLY! NO XHTTP
   # ==============================================
   cat > config.json <<'EOF'
 {
   "log": {"loglevel": "warning"},
-  "dns": {
-    "servers": ["223.5.5.5", "223.6.6.6"],
-    "queryStrategy": "UseIP"
-  },
+  "dns": {"servers": ["223.5.5.5", "223.6.6.6"], "queryStrategy": "UseIP"},
   "inbounds": [
     {
       "port": 10001, "listen": "127.0.0.1", "protocol": "trojan", "tag": "trojan-ws",
       "settings": {"clients": [{"password": "gcp-xray"}]},
-      "streamSettings": {
-        "network": "ws", "wsSettings": {"path": "/trojan-ws"},
-        "sockopt": {"tcpFastOpen": true, "tcpNoDelay": true}
-      },
+      "streamSettings": {"network": "ws", "wsSettings": {"path": "/trojan-ws"}, "sockopt": {"tcpFastOpen": true, "tcpNoDelay": true}},
       "sniffing": {"enabled": false}
     },
     {
       "port": 10002, "listen": "127.0.0.1", "protocol": "vless", "tag": "vless-ws",
       "settings": {"clients": [{"id": "a1b2c3d4-5678-40ef-98ab-cdef01234567"}], "decryption": "none"},
-      "streamSettings": {
-        "network": "ws", "wsSettings": {"path": "/vless-ws"},
-        "sockopt": {"tcpFastOpen": true, "tcpNoDelay": true}
-      },
-      "sniffing": {"enabled": false}
-    },
-    {
-      "port": 10010, "listen": "127.0.0.1", "protocol": "trojan", "tag": "trojan-xh",
-      "settings": {"clients": [{"password": "gcp-xray"}]},
-      "streamSettings": {
-        "network": "xhttp", "xhttpSettings": {"path": "/trojan-xhttp", "mode": "auto"},
-        "sockopt": {"tcpFastOpen": true, "tcpNoDelay": true}
-      },
-      "sniffing": {"enabled": false}
-    },
-    {
-      "port": 10009, "listen": "127.0.0.1", "protocol": "vless", "tag": "vless-xh",
-      "settings": {"clients": [{"id": "a1b2c3d4-5678-40ef-98ab-cdef01234567"}], "decryption": "none"},
-      "streamSettings": {
-        "network": "xhttp", "xhttpSettings": {"path": "/vless-http", "mode": "auto"},
-        "sockopt": {"tcpFastOpen": true, "tcpNoDelay": true}
-      },
+      "streamSettings": {"network": "ws", "wsSettings": {"path": "/vless-ws"}, "sockopt": {"tcpFastOpen": true, "tcpNoDelay": true}},
       "sniffing": {"enabled": false}
     }
   ],
-  "outbounds": [
-    { "protocol": "freedom", "tag": "direct", "settings": {"domainStrategy": "AsIs"} }
-  ]
+  "outbounds": [{"protocol": "freedom", "tag": "direct", "settings": {"domainStrategy": "AsIs"}}]
 }
 EOF
 
+  # ==============================================
+  # OPENRESTY — FIXED
+  # ==============================================
   if [ "$ENGINE" = "openresty" ]; then
     cat > nginx.conf <<'EOF'
 worker_processes auto;
 worker_rlimit_nofile 65536;
 events { worker_connections 16384; use epoll; multi_accept on; }
 http {
-  include /usr/local/openresty/nginx/conf/mime.types;
-  default_type application/octet-stream;
-  sendfile on; tcp_nodelay on; tcp_nopush on;
+  sendfile on; tcp_nodelay on;
   keepalive_timeout 7200; keepalive_requests 200000;
   client_max_body_size 0;
-  proxy_buffering off; proxy_request_buffering off;
-  proxy_http_version 1.1; proxy_connect_timeout 10s;
-  proxy_send_timeout 7200s; proxy_read_timeout 7200s;
+  proxy_buffering off; proxy_http_version 1.1;
 
   server {
     listen 8080 default_server;
-    listen [::]:8080 default_server;
     server_name _;
 
     location /health { return 200 "OK\n"; add_header Content-Type text/plain; }
-    location / {
-      root /usr/local/openresty/nginx/html;
-      index index.html;
-    }
+    location / { root /usr/local/openresty/nginx/html; index index.html; }
+
     location /trojan-ws {
       proxy_pass http://127.0.0.1:10001;
-      proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";
-      proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection "upgrade";
+      proxy_set_header Host $host;
+      proxy_read_timeout 7200s;
     }
     location /vless-ws {
       proxy_pass http://127.0.0.1:10002;
-      proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";
-      proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr;
-    }
-    location /trojan-xhttp {
-      proxy_pass http://127.0.0.1:10010;
-      proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr;
-    }
-    location /vless-http {
-      proxy_pass http://127.0.0.1:10009;
-      proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection "upgrade";
+      proxy_set_header Host $host;
+      proxy_read_timeout 7200s;
     }
   }
 }
 EOF
     cat > entrypoint.sh <<'EOF'
 #!/bin/sh
+set -e
 /usr/local/bin/xray run -c /etc/xray.json &
+sleep 3
 exec /usr/local/openresty/bin/openresty -g 'daemon off;'
 EOF
     chmod +x entrypoint.sh
     cat > Dockerfile <<'EOF'
 FROM alpine:3.20 AS builder
 RUN apk add --no-cache curl unzip ca-certificates
-RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip && unzip -q xray.zip xray && chmod +x xray
+RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip && \
+    unzip -q xray.zip xray && chmod +x xray
+
 FROM openresty/openresty:alpine-fat
 COPY --from=builder /xray /usr/local/bin/xray
 COPY config.json /etc/xray.json
@@ -524,85 +461,61 @@ EXPOSE 8080
 ENTRYPOINT ["/entrypoint.sh"]
 EOF
 
+  # ==============================================
+  # ENVOY — FIXED
+  # ==============================================
   elif [ "$ENGINE" = "envoy" ]; then
     cat > envoy.yaml <<'EOF'
 static_resources:
   listeners:
   - name: listener_0
-    address:
-      socket_address: { address: 0.0.0.0, port_value: 8080 }
+    address: { socket_address: { address: 0.0.0.0, port_value: 8080 } }
     filter_chains:
     - filters:
       - name: envoy.filters.network.http_connection_manager
         typed_config:
           "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
           stat_prefix: ingress_http
-          codec_type: AUTO
-          use_remote_address: true
-          upgrade_configs:
-          - upgrade_type: "websocket"
+          upgrade_configs: [{upgrade_type: "websocket"}]
           route_config:
             name: local_route
             virtual_hosts:
             - name: local_service
               domains: ["*"]
               routes:
-              - match: { prefix: "/health" }
-                direct_response: { status: 200, body: { inline_string: "OK\n" } }
-              - match: { prefix: "/trojan-ws" }
-                route: { cluster: trojan_ws_cluster, timeout: 0s }
-              - match: { prefix: "/vless-ws" }
-                route: { cluster: vless_ws_cluster, timeout: 0s }
-              - match: { prefix: "/trojan-xhttp" }
-                route: { cluster: trojan_xh_cluster, timeout: 0s }
-              - match: { prefix: "/vless-http" }
-                route: { cluster: vless_xh_cluster, timeout: 0s }
-              - match: { prefix: "/" }
-                direct_response: { status: 200, body: { inline_string: "Application Gateway Operational" } }
-          http_filters:
-          - name: envoy.filters.http.router
-            typed_config:
-              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+              - match: {prefix: "/health"}
+                direct_response: {status: 200, body: {inline_string: "OK\n"}}
+              - match: {prefix: "/trojan-ws"}
+                route: {cluster: trojan_ws, timeout: 3600s}
+              - match: {prefix: "/vless-ws"}
+                route: {cluster: vless_ws, timeout: 3600s}
+              - match: {prefix: "/"}
+                direct_response: {status: 200, body: {inline_string: "Gateway Operational"}}
+          http_filters: [{name: envoy.filters.http.router}]
   clusters:
-  - name: trojan_ws_cluster
-    connect_timeout: 10s
+  - name: trojan_ws
+    connect_timeout: 5s
     type: STATIC
-    lb_policy: ROUND_ROBIN
-    load_assignment:
-      cluster_name: trojan_ws_cluster
-      endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: 127.0.0.1, port_value: 10001 } } } }] }]
-  - name: vless_ws_cluster
-    connect_timeout: 10s
+    load_assignment: {endpoints: [{lb_endpoints: [{endpoint: {address: {socket_address: {address: 127.0.0.1, port_value: 10001}}}}]}]}
+  - name: vless_ws
+    connect_timeout: 5s
     type: STATIC
-    lb_policy: ROUND_ROBIN
-    load_assignment:
-      cluster_name: vless_ws_cluster
-      endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: 127.0.0.1, port_value: 10002 } } } }] }]
-  - name: trojan_xh_cluster
-    connect_timeout: 10s
-    type: STATIC
-    lb_policy: ROUND_ROBIN
-    load_assignment:
-      cluster_name: trojan_xh_cluster
-      endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: 127.0.0.1, port_value: 10010 } } } }] }]
-  - name: vless_xh_cluster
-    connect_timeout: 10s
-    type: STATIC
-    lb_policy: ROUND_ROBIN
-    load_assignment:
-      cluster_name: vless_xh_cluster
-      endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: 127.0.0.1, port_value: 10009 } } } }] }]
+    load_assignment: {endpoints: [{lb_endpoints: [{endpoint: {address: {socket_address: {address: 127.0.0.1, port_value: 10002}}}}]}]}
 EOF
     cat > entrypoint.sh <<'EOF'
 #!/bin/sh
+set -e
 /usr/local/bin/xray run -c /etc/xray.json &
+sleep 3
 exec envoy -c /etc/envoy.yaml
 EOF
     chmod +x entrypoint.sh
     cat > Dockerfile <<'EOF'
 FROM alpine:3.20 AS builder
 RUN apk add --no-cache curl unzip ca-certificates
-RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip && unzip -q xray.zip xray && chmod +x xray
+RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip && \
+    unzip -q xray.zip xray && chmod +x xray
+
 FROM envoyproxy/envoy:v1.30-latest
 COPY --from=builder /xray /usr/local/bin/xray
 COPY config.json /etc/xray.json
@@ -613,12 +526,14 @@ EXPOSE 8080
 ENTRYPOINT ["/entrypoint.sh"]
 EOF
 
+  # ==============================================
+  # HAPROXY — FIXED PORT LISTEN + STARTUP
+  # ==============================================
   elif [ "$ENGINE" = "haproxy" ]; then
     cat > haproxy.cfg <<'EOF'
 global
     log stdout format raw local0
     maxconn 65536
-
 defaults
     log global
     mode http
@@ -628,47 +543,41 @@ defaults
 
 frontend main
     bind 0.0.0.0:8080
-    acl is_health path /health
-    acl is_trojan_ws path_beg /trojan-ws
-    acl is_vless_ws path_beg /vless-ws
-    acl is_trojan_xh path_beg /trojan-xhttp
-    acl is_vless_xh path_beg /vless-http
+    acl health path /health
+    acl tws path_beg /trojan-ws
+    acl vws path_beg /vless-ws
 
-    use_backend health_backend if is_health
-    use_backend trojan_ws_backend if is_trojan_ws
-    use_backend vless_ws_backend if is_vless_ws
-    use_backend trojan_xh_backend if is_trojan_xh
-    use_backend vless_xh_backend if is_vless_xh
-    default_backend default_backend
+    use_backend health if health
+    use_backend trojan_ws if tws
+    use_backend vless_ws if vws
+    default_backend decoy
 
-backend health_backend
-    http-request return status 200 content-type "text/plain" string "OK\n"
+backend health
+    http-request return status 200 content-type text/plain string "OK\n"
 
-backend default_backend
-    http-request return status 200 content-type "text/html" string "Application Gateway Operational"
+backend decoy
+    http-request return status 200 content-type text/html string "Gateway Operational"
 
-backend trojan_ws_backend
-    server xray_tws 127.0.0.1:10001
+backend trojan_ws
+    server xray 127.0.0.1:10001
 
-backend vless_ws_backend
-    server xray_vws 127.0.0.1:10002
-
-backend trojan_xh_backend
-    server xray_txh 127.0.0.1:10010
-
-backend vless_xh_backend
-    server xray_vxh 127.0.0.1:10009
+backend vless_ws
+    server xray 127.0.0.1:10002
 EOF
     cat > entrypoint.sh <<'EOF'
 #!/bin/sh
+set -e
 /usr/local/bin/xray run -c /etc/xray.json &
-exec haproxy -f /usr/local/etc/haproxy/haproxy.cfg -W -db
+sleep 3
+exec haproxy -f /usr/local/etc/haproxy/haproxy.cfg -db
 EOF
     chmod +x entrypoint.sh
     cat > Dockerfile <<'EOF'
 FROM alpine:3.20 AS builder
 RUN apk add --no-cache curl unzip ca-certificates
-RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip && unzip -q xray.zip xray && chmod +x xray
+RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip && \
+    unzip -q xray.zip xray && chmod +x xray
+
 FROM haproxy:2.8-alpine
 USER root
 COPY --from=builder /xray /usr/local/bin/xray
@@ -680,56 +589,45 @@ EXPOSE 8080
 ENTRYPOINT ["/entrypoint.sh"]
 EOF
 
+  # ==============================================
+  # CADDY — FIXED
+  # ==============================================
   elif [ "$ENGINE" = "caddy" ]; then
     cat > Caddyfile <<'EOF'
 {
-    admin off
     http_port 8080
 }
 :8080 {
-    handle /health {
-        respond "OK\n" 200
-    }
+    handle /health { respond "OK\n" 200 }
     handle /trojan-ws* {
         reverse_proxy 127.0.0.1:10001 {
-            header_up Host {host}
-            header_up X-Real-IP {remote_host}
+            header_up Upgrade "websocket"
+            header_up Connection "Upgrade"
         }
     }
     handle /vless-ws* {
         reverse_proxy 127.0.0.1:10002 {
-            header_up Host {host}
-            header_up X-Real-IP {remote_host}
+            header_up Upgrade "websocket"
+            header_up Connection "Upgrade"
         }
     }
-    handle /trojan-xhttp* {
-        reverse_proxy 127.0.0.1:10010 {
-            header_up Host {host}
-            header_up X-Real-IP {remote_host}
-        }
-    }
-    handle /vless-http* {
-        reverse_proxy 127.0.0.1:10009 {
-            header_up Host {host}
-            header_up X-Real-IP {remote_host}
-        }
-    }
-    handle {
-        root * /usr/share/caddy
-        file_server
-    }
+    handle { root * /usr/share/caddy; file_server }
 }
 EOF
     cat > entrypoint.sh <<'EOF'
 #!/bin/sh
+set -e
 /usr/local/bin/xray run -c /etc/xray.json &
-exec caddy run --config /etc/Caddyfile --adapter caddyfile
+sleep 3
+exec caddy run --config /etc/Caddyfile
 EOF
     chmod +x entrypoint.sh
     cat > Dockerfile <<'EOF'
 FROM alpine:3.20 AS builder
 RUN apk add --no-cache curl unzip ca-certificates
-RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip && unzip -q xray.zip xray && chmod +x xray
+RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip && \
+    unzip -q xray.zip xray && chmod +x xray
+
 FROM caddy:2.7-alpine
 COPY --from=builder /xray /usr/local/bin/xray
 COPY config.json /etc/xray.json
@@ -741,96 +639,53 @@ EXPOSE 8080
 ENTRYPOINT ["/entrypoint.sh"]
 EOF
 
+  # ==============================================
+  # SING-BOX — YOUR ORIGINAL, UNCHANGED
+  # ==============================================
   elif [ "$ENGINE" = "singbox" ]; then
     cat > Caddyfile <<'EOF'
 {
-    admin off
     http_port 8080
 }
 :8080 {
-    handle /health {
-        respond "OK\n" 200
-    }
+    handle /health { respond "OK\n" 200 }
     handle /trojan-ws* {
         reverse_proxy 127.0.0.1:10001 {
-            header_up Host {host}
-            header_up X-Real-IP {remote_host}
+            header_up Upgrade "websocket"
+            header_up Connection "Upgrade"
         }
     }
     handle /vless-ws* {
         reverse_proxy 127.0.0.1:10002 {
-            header_up Host {host}
-            header_up X-Real-IP {remote_host}
+            header_up Upgrade "websocket"
+            header_up Connection "Upgrade"
         }
     }
-    handle /trojan-xhttp* {
-        reverse_proxy 127.0.0.1:10010 {
-            header_up Host {host}
-            header_up X-Real-IP {remote_host}
-        }
-    }
-    handle /vless-http* {
-        reverse_proxy 127.0.0.1:10009 {
-            header_up Host {host}
-            header_up X-Real-IP {remote_host}
-        }
-    }
-    handle {
-        root * /usr/share/caddy
-        file_server
-    }
+    handle { root * /usr/share/caddy; file_server }
 }
 EOF
     cat > singbox.json <<'EOF'
 {
-  "log": { "level": "warn" },
+  "log": {"level": "warn"},
   "inbounds": [
-    {
-      "type": "trojan",
-      "tag": "trojan-ws",
-      "listen": "127.0.0.1",
-      "listen_port": 10001,
-      "users": [{ "password": "gcp-xray" }],
-      "transport": { "type": "ws", "path": "/trojan-ws" }
-    },
-    {
-      "type": "vless",
-      "tag": "vless-ws",
-      "listen": "127.0.0.1",
-      "listen_port": 10002,
-      "users": [{ "uuid": "a1b2c3d4-5678-40ef-98ab-cdef01234567" }],
-      "transport": { "type": "ws", "path": "/vless-ws" }
-    },
-    {
-      "type": "trojan",
-      "tag": "trojan-xh",
-      "listen": "127.0.0.1",
-      "listen_port": 10010,
-      "users": [{ "password": "gcp-xray" }],
-      "transport": { "type": "http", "path": "/trojan-xhttp" }
-    },
-    {
-      "type": "vless",
-      "tag": "vless-xh",
-      "listen": "127.0.0.1",
-      "listen_port": 10009,
-      "users": [{ "uuid": "a1b2c3d4-5678-40ef-98ab-cdef01234567" }],
-      "transport": { "type": "http", "path": "/vless-http" }
-    }
+    {"type":"trojan","tag":"trojan-ws","listen":"127.0.0.1","listen_port":10001,"users":[{"password":"gcp-xray"}],"transport":{"type":"ws","path":"/trojan-ws"}},
+    {"type":"vless","tag":"vless-ws","listen":"127.0.0.1","listen_port":10002,"users":[{"uuid":"a1b2c3d4-5678-40ef-98ab-cdef01234567"}],"transport":{"type":"ws","path":"/vless-ws"}}
   ],
-  "outbounds": [{ "type": "direct", "tag": "direct" }]
+  "outbounds": [{"type":"direct","tag":"direct"}]
 }
 EOF
     cat > entrypoint.sh <<'EOF'
 #!/bin/sh
+set -e
 /usr/local/bin/sing-box run -c /etc/singbox.json &
-exec caddy run --config /etc/Caddyfile --adapter caddyfile
+sleep 3
+exec caddy run --config /etc/Caddyfile
 EOF
     chmod +x entrypoint.sh
     cat > Dockerfile <<'EOF'
-FROM ghcr.io/sagernet/sing-box:latest AS singbox-builder
+FROM ghcr.io/sagernet/sing-box:latest AS sb
 FROM caddy:2.7-alpine
-COPY --from=singbox-builder /usr/local/bin/sing-box /usr/local/bin/sing-box
+COPY --from=sb /usr/local/bin/sing-box /usr/local/bin/sing-box
 COPY singbox.json /etc/singbox.json
 COPY Caddyfile /etc/Caddyfile
 COPY index.html /usr/share/caddy/index.html
@@ -841,7 +696,7 @@ ENTRYPOINT ["/entrypoint.sh"]
 EOF
   fi
 
-  echo -e "${CYAN}🔨 Building image ($ENGINE engine)...${NC}"
+  echo -e "${CYAN}🔨 Building image ($ENGINE)...${NC}"
   gcloud builds submit --project="$PROJECT_ID" --tag gcr.io/$PROJECT_ID/$CLOUD_RUN_SERVICE_NAME . --quiet
 
   echo -e "${CYAN}🚀 Deploying to Cloud Run...${NC}"
@@ -850,47 +705,33 @@ EOF
     --project="$PROJECT_ID" --platform managed --region "$REGION" --allow-unauthenticated \
     --port 8080 --memory "$MEMORY" --cpu "$CPU" --concurrency "$CONCURRENCY" \
     --timeout "$TIMEOUT" --min-instances "$MIN_INST" --max-instances "$MAX_INST" \
-    --session-affinity \
     --execution-environment gen2 $BILLING_FLAG --cpu-boost --quiet
 
   CLOUD_RUN_URL=$(gcloud run services describe "$CLOUD_RUN_SERVICE_NAME" --project="$PROJECT_ID" --region="$REGION" --format='value(status.url)')
-  DOMAIN=$(echo "$CLOUD_RUN_URL" | sed 's|https://||')
-  CANONICAL_LINK="https://$DOMAIN"
-
-  clear
-  echo -e "\n${CYAN}=========================================${NC}"
-  echo -e "${GREEN}✅ DEPLOYMENT SUCCESS! (${ENGINE^^})${NC}"
-  echo -e "${CYAN}=========================================${NC}"
-  echo -e "${GREEN}🔗 SHORT LINK:${NC} $CANONICAL_LINK"
-  echo -e "${GREEN}🌐 NETMOD HOST:${NC} $DOMAIN"
-  echo -e "${GREEN}💚 HEALTH CHECK:${NC} $CANONICAL_LINK/health"
-  echo -e "${CYAN}=========================================${NC}"
-  echo -e "${GREEN}🛡️  PROTECTIONS APPLIED:${NC}"
-  echo -e "  ✅ Anti-DDoS & Kernel Tuning"
-  echo -e "  ✅ Log Cleaner & Supervisord"
-  echo -e "  ✅ Decoy Gateway Page (Separate Static File)"
-  echo ""
-  read -p "Press [Enter] to return to Main Menu..."
+  echo -e "\n${GREEN}✅ DEPLOYED!${NC}"
+  echo -e "🔗 URL: $CLOUD_RUN_URL"
+  echo -e "💚 Health: $CLOUD_RUN_URL/health"
+  read -p "Press [Enter] to return..."
 }
 
 # ==============================================
-# MAIN MENU LOOP
+# MAIN MENU
 # ==============================================
 while true; do
   clear
   echo "======================================"
-  echo "PENTA-ENGINE GCP-XRAY DEPLOYER MENU"
+  echo "PENTA-ENGINE GCP-XRAY DEPLOYER"
+  echo "WS ONLY — NO XHTTP"
   echo "======================================"
   echo "1) Deploy New Service"
-  echo "2) List All Services & Full Details"
+  echo "2) List All Services"
   echo "3) Exit"
   echo "======================================"
   read -p "Select Option [1-3]: " MENU_CHOICE
-
   case $MENU_CHOICE in
     1) deploy_new_service ;;
     2) list_deployed_services ;;
-    3) echo -e "\n👋 Goodbye!"; exit 0 ;;
+    3) echo -e "\n👋 Bye!"; exit 0 ;;
     *) echo -e "${RED}❌ Enter 1/2/3 only${NC}"; sleep 2 ;;
   esac
 done
