@@ -33,7 +33,6 @@ fi
 sysctl_optimize() {
   echo -e "\n${CYAN}⚙️ Applying kernel & network optimizations...${NC}"
   sudo tee /etc/sysctl.d/99-solid-host.conf > /dev/null <<'EOF'
-# Network — Solid Keepalive & Throughput
 net.ipv4.tcp_keepalive_time = 300
 net.ipv4.tcp_keepalive_intvl = 30
 net.ipv4.tcp_keepalive_probes = 6
@@ -47,10 +46,8 @@ net.core.rmem_max = 67108864
 net.core.wmem_max = 67108864
 net.ipv4.tcp_rmem = 4096 87380 33554432
 net.ipv4.tcp_wmem = 4096 65536 33554432
-net.ipv4.tcp_low_latency = 1
 net.ipv4.tcp_mtu_probing = 1
 net.ipv4.ip_local_port_range = 1024 65535
-# Anti-DDoS / Hardening
 net.ipv4.tcp_syncookies = 1
 net.ipv4.tcp_rfc1337 = 1
 net.ipv4.conf.all.rp_filter = 1
@@ -418,38 +415,38 @@ EOF
   },
   "inbounds": [
     {
-      "port": 10001, "listen": "::", "protocol": "trojan", "tag": "trojan-ws",
+      "port": 10001, "listen": "127.0.0.1", "protocol": "trojan", "tag": "trojan-ws",
       "settings": {"clients": [{"password": "gcp-xray"}]},
       "streamSettings": {
         "network": "ws", "wsSettings": {"path": "/trojan-ws"},
-        "sockopt": {"tcpFastOpen": true, "tcpNoDelay": true, "tcpKeepAliveInterval": 30, "tcpKeepAliveIdle": 300}
+        "sockopt": {"tcpFastOpen": true, "tcpNoDelay": true}
       },
       "sniffing": {"enabled": false}
     },
     {
-      "port": 10002, "listen": "::", "protocol": "vless", "tag": "vless-ws",
+      "port": 10002, "listen": "127.0.0.1", "protocol": "vless", "tag": "vless-ws",
       "settings": {"clients": [{"id": "a1b2c3d4-5678-40ef-98ab-cdef01234567"}], "decryption": "none"},
       "streamSettings": {
         "network": "ws", "wsSettings": {"path": "/vless-ws"},
-        "sockopt": {"tcpFastOpen": true, "tcpNoDelay": true, "tcpKeepAliveInterval": 30, "tcpKeepAliveIdle": 300}
+        "sockopt": {"tcpFastOpen": true, "tcpNoDelay": true}
       },
       "sniffing": {"enabled": false}
     },
     {
-      "port": 10010, "listen": "::", "protocol": "trojan", "tag": "trojan-xh",
+      "port": 10010, "listen": "127.0.0.1", "protocol": "trojan", "tag": "trojan-xh",
       "settings": {"clients": [{"password": "gcp-xray"}]},
       "streamSettings": {
         "network": "xhttp", "xhttpSettings": {"path": "/trojan-xhttp", "mode": "auto"},
-        "sockopt": {"tcpFastOpen": true, "tcpNoDelay": true, "tcpKeepAliveInterval": 30, "tcpKeepAliveIdle": 300}
+        "sockopt": {"tcpFastOpen": true, "tcpNoDelay": true}
       },
       "sniffing": {"enabled": false}
     },
     {
-      "port": 10009, "listen": "::", "protocol": "vless", "tag": "vless-xh",
+      "port": 10009, "listen": "127.0.0.1", "protocol": "vless", "tag": "vless-xh",
       "settings": {"clients": [{"id": "a1b2c3d4-5678-40ef-98ab-cdef01234567"}], "decryption": "none"},
       "streamSettings": {
         "network": "xhttp", "xhttpSettings": {"path": "/vless-http", "mode": "auto"},
-        "sockopt": {"tcpFastOpen": true, "tcpNoDelay": true, "tcpKeepAliveInterval": 30, "tcpKeepAliveIdle": 300}
+        "sockopt": {"tcpFastOpen": true, "tcpNoDelay": true}
       },
       "sniffing": {"enabled": false}
     }
@@ -476,7 +473,8 @@ http {
   proxy_send_timeout 7200s; proxy_read_timeout 7200s;
 
   server {
-    listen 8080 default_server reuseport;
+    listen 8080 default_server;
+    listen [::]:8080 default_server;
     server_name _;
 
     location /health { return 200 "OK\n"; add_header Content-Type text/plain; }
@@ -508,7 +506,6 @@ EOF
     cat > entrypoint.sh <<'EOF'
 #!/bin/sh
 /usr/local/bin/xray run -c /etc/xray.json &
-sleep 2
 exec /usr/local/openresty/bin/openresty -g 'daemon off;'
 EOF
     chmod +x entrypoint.sh
@@ -541,6 +538,9 @@ static_resources:
           "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
           stat_prefix: ingress_http
           codec_type: AUTO
+          use_remote_address: true
+          upgrade_configs:
+          - upgrade_type: "websocket"
           route_config:
             name: local_route
             virtual_hosts:
@@ -550,13 +550,13 @@ static_resources:
               - match: { prefix: "/health" }
                 direct_response: { status: 200, body: { inline_string: "OK\n" } }
               - match: { prefix: "/trojan-ws" }
-                route: { cluster: trojan_ws_cluster, timeout: 3600s, upgrade_configs: [{ upgrade_type: "websocket" }] }
+                route: { cluster: trojan_ws_cluster, timeout: 0s }
               - match: { prefix: "/vless-ws" }
-                route: { cluster: vless_ws_cluster, timeout: 3600s, upgrade_configs: [{ upgrade_type: "websocket" }] }
+                route: { cluster: vless_ws_cluster, timeout: 0s }
               - match: { prefix: "/trojan-xhttp" }
-                route: { cluster: trojan_xh_cluster, timeout: 3600s }
+                route: { cluster: trojan_xh_cluster, timeout: 0s }
               - match: { prefix: "/vless-http" }
-                route: { cluster: vless_xh_cluster, timeout: 3600s }
+                route: { cluster: vless_xh_cluster, timeout: 0s }
               - match: { prefix: "/" }
                 direct_response: { status: 200, body: { inline_string: "Application Gateway Operational" } }
           http_filters:
@@ -596,7 +596,6 @@ EOF
     cat > entrypoint.sh <<'EOF'
 #!/bin/sh
 /usr/local/bin/xray run -c /etc/xray.json &
-sleep 2
 exec envoy -c /etc/envoy.yaml
 EOF
     chmod +x entrypoint.sh
@@ -619,14 +618,16 @@ EOF
 global
     log stdout format raw local0
     maxconn 65536
+
 defaults
     log global
     mode http
     timeout connect 10s
     timeout client 3600s
     timeout server 3600s
+
 frontend main
-    bind *:8080
+    bind 0.0.0.0:8080
     acl is_health path /health
     acl is_trojan_ws path_beg /trojan-ws
     acl is_vless_ws path_beg /vless-ws
@@ -642,22 +643,26 @@ frontend main
 
 backend health_backend
     http-request return status 200 content-type "text/plain" string "OK\n"
+
 backend default_backend
     http-request return status 200 content-type "text/html" string "Application Gateway Operational"
+
 backend trojan_ws_backend
     server xray_tws 127.0.0.1:10001
+
 backend vless_ws_backend
     server xray_vws 127.0.0.1:10002
+
 backend trojan_xh_backend
     server xray_txh 127.0.0.1:10010
+
 backend vless_xh_backend
     server xray_vxh 127.0.0.1:10009
 EOF
     cat > entrypoint.sh <<'EOF'
 #!/bin/sh
 /usr/local/bin/xray run -c /etc/xray.json &
-sleep 2
-exec haproxy -f /usr/local/etc/haproxy/haproxy.cfg -db
+exec haproxy -f /usr/local/etc/haproxy/haproxy.cfg -W -db
 EOF
     chmod +x entrypoint.sh
     cat > Dockerfile <<'EOF'
@@ -665,11 +670,11 @@ FROM alpine:3.20 AS builder
 RUN apk add --no-cache curl unzip ca-certificates
 RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip && unzip -q xray.zip xray && chmod +x xray
 FROM haproxy:2.8-alpine
+USER root
 COPY --from=builder /xray /usr/local/bin/xray
 COPY config.json /etc/xray.json
 COPY haproxy.cfg /usr/local/etc/haproxy/haproxy.cfg
 COPY entrypoint.sh /entrypoint.sh
-USER root
 RUN chmod +x /usr/local/bin/xray /entrypoint.sh
 EXPOSE 8080
 ENTRYPOINT ["/entrypoint.sh"]
@@ -718,7 +723,6 @@ EOF
     cat > entrypoint.sh <<'EOF'
 #!/bin/sh
 /usr/local/bin/xray run -c /etc/xray.json &
-sleep 2
 exec caddy run --config /etc/Caddyfile --adapter caddyfile
 EOF
     chmod +x entrypoint.sh
@@ -820,7 +824,6 @@ EOF
     cat > entrypoint.sh <<'EOF'
 #!/bin/sh
 /usr/local/bin/sing-box run -c /etc/singbox.json &
-sleep 2
 exec caddy run --config /etc/Caddyfile --adapter caddyfile
 EOF
     chmod +x entrypoint.sh
