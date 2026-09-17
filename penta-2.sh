@@ -669,7 +669,7 @@ EXPOSE 8080
 ENTRYPOINT ["/entrypoint.sh"]
 EOF
 
-  elif [ "$ENGINE" = "haproxy" ]; then
+    elif [ "$ENGINE" = "haproxy" ]; then
     cat > haproxy.cfg <<'EOF'
 global
     log stdout format raw local0
@@ -715,10 +715,19 @@ backend trojan_xh_backend
 backend vless_xh_backend
     server xray_vxh 127.0.0.1:10009
 EOF
+
     cat > entrypoint.sh <<'EOF'
 #!/bin/sh
+set -e
+
+# Start Xray in background
 /usr/local/bin/xray run -c /etc/xray.json &
-exec haproxy -f /usr/local/etc/haproxy/haproxy.cfg -W -db
+
+# Wait 1 second for Xray to bind ports
+sleep 1
+
+# Start HAProxy directly with explicit config path
+exec haproxy -W -db -f /usr/local/etc/haproxy/haproxy.cfg
 EOF
     chmod +x entrypoint.sh
 
@@ -734,8 +743,10 @@ COPY config.json /etc/xray.json
 COPY haproxy.cfg /usr/local/etc/haproxy/haproxy.cfg
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /usr/local/bin/xray /entrypoint.sh
-EXPOSE 8080
+
+# Reset default entrypoint from official image to avoid conflict
 ENTRYPOINT ["/entrypoint.sh"]
+EXPOSE 8080
 EOF
 
   elif [ "$ENGINE" = "caddy" ]; then
