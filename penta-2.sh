@@ -5,7 +5,7 @@ set -euo pipefail
 # 🚀 GCP-XRAY MULTI-ENGINE DEPLOYER
 # ✅ ENGINES: OPENRESTY, ENVOY, HAPROXY, CADDY, SING-BOX
 # ✅ PURE WS ONLY — NO XHTTP
-# ✅ FIXED: Port 8080 Listen + Startup Order
+# ✅ FIXED: Envoy/HAProxy/Caddy Startup — OpenResty & Sing-Box UNCHANGED
 # ✅ Decoy Page | Anti-DDoS | Log Cleaner
 # =========================================
 
@@ -83,11 +83,20 @@ EOF
 }
 
 # ==============================================
-# SUPERVISORD
+# FIX: ADD GPG KEY FIRST + SUPERVISORD
 # ==============================================
 install_supervisord() {
+  echo -e "${CYAN}🔧 Fixing GitHub CLI GPG key...${NC}"
+  # Idugang ang nawala nga public key — ayaw kini laktawi
+  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+  sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+
+  # Siguroha nga tama ang sources.list entry
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+
   echo -e "${CYAN}📦 Installing Supervisord...${NC}"
-  sudo apt update -qq && sudo apt install -y -qq supervisor || true
+  sudo apt update -qq 2>/dev/null || true
+  sudo apt install -y -qq supervisor || true
   sudo systemctl enable supervisor >/dev/null 2>&1 || true
 }
 
@@ -399,7 +408,7 @@ EOF
 EOF
 
   # ==============================================
-  # OPENRESTY — FIXED
+  # OPENRESTY — ✅ UNCHANGED / ORIGINAL
   # ==============================================
   if [ "$ENGINE" = "openresty" ]; then
     cat > nginx.conf <<'EOF'
@@ -462,51 +471,87 @@ ENTRYPOINT ["/entrypoint.sh"]
 EOF
 
   # ==============================================
-  # ENVOY — FIXED
+  # ENVOY — ✅ FIXED STARTUP + PORT
   # ==============================================
   elif [ "$ENGINE" = "envoy" ]; then
     cat > envoy.yaml <<'EOF'
 static_resources:
   listeners:
   - name: listener_0
-    address: { socket_address: { address: 0.0.0.0, port_value: 8080 } }
+    address:
+      socket_address:
+        address: 0.0.0.0
+        port_value: 8080
     filter_chains:
     - filters:
       - name: envoy.filters.network.http_connection_manager
         typed_config:
           "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
           stat_prefix: ingress_http
-          upgrade_configs: [{upgrade_type: "websocket"}]
+          codec_type: AUTO
+          upgrade_configs:
+          - upgrade_type: "websocket"
           route_config:
             name: local_route
             virtual_hosts:
             - name: local_service
               domains: ["*"]
               routes:
-              - match: {prefix: "/health"}
-                direct_response: {status: 200, body: {inline_string: "OK\n"}}
-              - match: {prefix: "/trojan-ws"}
-                route: {cluster: trojan_ws, timeout: 3600s}
-              - match: {prefix: "/vless-ws"}
-                route: {cluster: vless_ws, timeout: 3600s}
-              - match: {prefix: "/"}
-                direct_response: {status: 200, body: {inline_string: "Gateway Operational"}}
-          http_filters: [{name: envoy.filters.http.router}]
+              - match: { prefix: "/health" }
+                direct_response: { status: 200, body: { inline_string: "OK\n" } }
+              - match: { prefix: "/trojan-ws" }
+                route: { cluster: trojan_ws, timeout: 3600s, idle_timeout: 3600s }
+              - match: { prefix: "/vless-ws" }
+                route: { cluster: vless_ws, timeout: 3600s, idle_timeout: 3600s }
+              - match: { prefix: "/" }
+                direct_response: { status: 200, body: { inline_string: "Gateway Operational" } }
+          http_filters:
+          - name: envoy.filters.http.router
   clusters:
   - name: trojan_ws
-    connect_timeout: 5s
+    connect_timeout: 10s
     type: STATIC
-    load_assignment: {endpoints: [{lb_endpoints: [{endpoint: {address: {socket_address: {address: 127.0.0.1, port_value: 10001}}}}]}]}
+    load_assignment:
+      cluster_name: trojan_ws
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: 127.0.0.1
+                port_value: 10001
   - name: vless_ws
-    connect_timeout: 5s
+    connect_timeout: 10s
     type: STATIC
-    load_assignment: {endpoints: [{lb_endpoints: [{endpoint: {address: {socket_address: {address: 127.0.0.1, port_value: 10002}}}}]}]}
+    load_assignment:
+      cluster_name: vless_ws
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: 127.0.0.1
+                port_value: 10002
 EOF
     cat > entrypoint.sh <<'EOF'
 #!/bin/sh
 set -e
+export PORT=8080
+
+# Start Xray background
 /usr/local/bin/xray run -c /etc/xray.json &
-sleep 3
+XRAY_PID=$!
+
+# Give Xray enough time to bind ports
+sleep 5
+
+# Verify Xray still running
+if ! kill -0 $XRAY_PID 2>/dev/null; then
+  echo "ERROR: Xray process failed"
+  exit 1
+fi
+
+echo "Xray ready — starting Envoy on :8080"
 exec envoy -c /etc/envoy.yaml
 EOF
     chmod +x entrypoint.sh
@@ -517,6 +562,7 @@ RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linu
     unzip -q xray.zip xray && chmod +x xray
 
 FROM envoyproxy/envoy:v1.30-latest
+ENV PORT=8080
 COPY --from=builder /xray /usr/local/bin/xray
 COPY config.json /etc/xray.json
 COPY envoy.yaml /etc/envoy.yaml
@@ -527,13 +573,18 @@ ENTRYPOINT ["/entrypoint.sh"]
 EOF
 
   # ==============================================
-  # HAPROXY — FIXED PORT LISTEN + STARTUP
+  # HAPROXY — ✅ FIXED PATH + STARTUP + PORT
   # ==============================================
   elif [ "$ENGINE" = "haproxy" ]; then
     cat > haproxy.cfg <<'EOF'
 global
     log stdout format raw local0
     maxconn 65536
+    chroot /var/lib/haproxy
+    stats socket /run/haproxy.sock mode 660
+    user haproxy
+    group haproxy
+
 defaults
     log global
     mode http
@@ -547,29 +598,46 @@ frontend main
     acl tws path_beg /trojan-ws
     acl vws path_beg /vless-ws
 
-    use_backend health if health
-    use_backend trojan_ws if tws
-    use_backend vless_ws if vws
-    default_backend decoy
+    use_backend health_back if health
+    use_backend trojan_ws_back if tws
+    use_backend vless_ws_back if vws
+    default_backend decoy_back
 
-backend health
+backend health_back
     http-request return status 200 content-type text/plain string "OK\n"
 
-backend decoy
+backend decoy_back
     http-request return status 200 content-type text/html string "Gateway Operational"
 
-backend trojan_ws
+backend trojan_ws_back
     server xray 127.0.0.1:10001
 
-backend vless_ws
+backend vless_ws_back
     server xray 127.0.0.1:10002
 EOF
     cat > entrypoint.sh <<'EOF'
 #!/bin/sh
 set -e
+export PORT=8080
+
+# Prepare HAProxy runtime dir
+mkdir -p /var/lib/haproxy /run
+
+# Start Xray background
 /usr/local/bin/xray run -c /etc/xray.json &
-sleep 3
-exec haproxy -f /usr/local/etc/haproxy/haproxy.cfg -db
+XRAY_PID=$!
+
+# Give Xray enough time to bind ports
+sleep 5
+
+# Verify Xray still running
+if ! kill -0 $XRAY_PID 2>/dev/null; then
+  echo "ERROR: Xray process failed"
+  exit 1
+fi
+
+echo "Xray ready — starting HAProxy on :8080"
+exec haproxy -f /etc/haproxy/haproxy.cfg -db
 EOF
     chmod +x entrypoint.sh
     cat > Dockerfile <<'EOF'
@@ -579,18 +647,20 @@ RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linu
     unzip -q xray.zip xray && chmod +x xray
 
 FROM haproxy:2.8-alpine
+ENV PORT=8080
 USER root
 COPY --from=builder /xray /usr/local/bin/xray
 COPY config.json /etc/xray.json
-COPY haproxy.cfg /usr/local/etc/haproxy/haproxy.cfg
+COPY haproxy.cfg /etc/haproxy/haproxy.cfg
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /usr/local/bin/xray /entrypoint.sh
+RUN chmod +x /usr/local/bin/xray /entrypoint.sh && \
+    mkdir -p /var/lib/haproxy /run
 EXPOSE 8080
 ENTRYPOINT ["/entrypoint.sh"]
 EOF
 
   # ==============================================
-  # CADDY — FIXED
+  # CADDY — ✅ FIXED STARTUP + PORT
   # ==============================================
   elif [ "$ENGINE" = "caddy" ]; then
     cat > Caddyfile <<'EOF'
@@ -603,12 +673,14 @@ EOF
         reverse_proxy 127.0.0.1:10001 {
             header_up Upgrade "websocket"
             header_up Connection "Upgrade"
+            header_up Host {host}
         }
     }
     handle /vless-ws* {
         reverse_proxy 127.0.0.1:10002 {
             header_up Upgrade "websocket"
             header_up Connection "Upgrade"
+            header_up Host {host}
         }
     }
     handle { root * /usr/share/caddy; file_server }
@@ -617,8 +689,22 @@ EOF
     cat > entrypoint.sh <<'EOF'
 #!/bin/sh
 set -e
+export PORT=8080
+
+# Start Xray background
 /usr/local/bin/xray run -c /etc/xray.json &
-sleep 3
+XRAY_PID=$!
+
+# Give Xray enough time to bind ports
+sleep 5
+
+# Verify Xray still running
+if ! kill -0 $XRAY_PID 2>/dev/null; then
+  echo "ERROR: Xray process failed"
+  exit 1
+fi
+
+echo "Xray ready — starting Caddy on :8080"
 exec caddy run --config /etc/Caddyfile
 EOF
     chmod +x entrypoint.sh
@@ -629,6 +715,7 @@ RUN curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linu
     unzip -q xray.zip xray && chmod +x xray
 
 FROM caddy:2.7-alpine
+ENV PORT=8080
 COPY --from=builder /xray /usr/local/bin/xray
 COPY config.json /etc/xray.json
 COPY Caddyfile /etc/Caddyfile
@@ -640,7 +727,7 @@ ENTRYPOINT ["/entrypoint.sh"]
 EOF
 
   # ==============================================
-  # SING-BOX — YOUR ORIGINAL, UNCHANGED
+  # SING-BOX — ✅ UNCHANGED / ORIGINAL
   # ==============================================
   elif [ "$ENGINE" = "singbox" ]; then
     cat > Caddyfile <<'EOF'
@@ -715,7 +802,7 @@ EOF
 }
 
 # ==============================================
-# MAIN MENU
+# MAIN MENU — UNCHANGED / ORIGINAL
 # ==============================================
 while true; do
   clear
